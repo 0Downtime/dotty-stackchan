@@ -9,6 +9,11 @@ services:
     # --- BEGIN CUDA BLOCK (removed by `make setup` if no NVIDIA runtime) ---
     # GPU access for WhisperLocal ASR (faster-whisper float16 needs CUDA).
     # Requires nvidia-container-toolkit on the host.
+    #
+    # ASR ONLY — this has nothing to do with the LLM. A CPU-only host is fine:
+    # `make setup` drops this block and selects FunASR (CPU) instead. Serving
+    # models from a GPU on another machine (LM Studio, Ollama, llama-swap) needs
+    # no GPU here at all — see docs/llm-backends.md.
     runtime: nvidia
     deploy:
       resources:

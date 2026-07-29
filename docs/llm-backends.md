@@ -14,10 +14,10 @@ and the matching block under `LLM:` in `.config.yaml`.
 | | OpenAI-compatible API | llama-swap (local, multi-model) | PiVoiceLLM (pi agent — default) |
 |---|---|---|---|
 | **Provider key** | `OpenAICompat` | `OpenAICompat` | `PiVoiceLLM` |
-| **Runs where** | Cloud (OpenRouter, OpenAI, etc.) | Local GPU host (Docker, llama.cpp) | dotty-pi container on the Docker host |
+| **Runs where** | Cloud (OpenRouter, OpenAI, …) or any OpenAI-compatible server on your LAN (LM Studio, Ollama) | Local GPU host (Docker, llama.cpp) | dotty-pi container on the Docker host |
 | **Latency** | 300-800 ms (network-bound) | 200-600 ms (GPU-bound; `qwen3.5:4b` warm <500 ms) | 500-1500 ms (pi agent turn overhead) |
 | **Cost** | Pay-per-token | Free (electricity + hardware) | Free (electricity + hardware) |
-| **Privacy** | Tokens sent to cloud provider | Fully local, nothing leaves LAN | Fully local |
+| **Privacy** | Tokens sent to cloud provider — or stay on the LAN if the endpoint is local | Fully local, nothing leaves LAN | Fully local |
 | **Setup complexity** | Low — API key + model name | Medium — GPU, Docker, GGUF download | Medium — dotty-pi container + llama-swap |
 | **Memory / tools** | None | None | Yes — memory_lookup, recall_person, remember, remember_person, think_hard, take_photo, play_song |
 | **Hot-swappable** | Restart container | Restart container | Restart container |
@@ -51,6 +51,84 @@ LLM:
 - Swap `url` / `api_key` / `model` for any OpenAI-compatible service.
 - `persona_file` is loaded as the system prompt.
 - No memory between sessions — each request is stateless.
+
+### LM Studio (or any inference box on another machine)
+
+A common setup: xiaozhi-server runs on a headless Linux Docker host, and the
+GPU lives in a separate desktop — often a Windows PC running
+[LM Studio](https://lmstudio.ai/). LM Studio's local server speaks the same
+Chat Completions wire format, so `OpenAICompat` talks to it unchanged.
+
+```yaml
+selected_module:
+  LLM: OpenAICompat
+
+LLM:
+  OpenAICompat:
+    type: openai_compat
+    url: http://192.168.1.50:1234/v1     # the GPU box's LAN IP, not localhost
+    api_key: lm-studio                    # any non-empty string — LM Studio ignores it
+    model: qwen2.5-7b-instruct            # must match LM Studio's model id
+    persona_file: personas/default.md
+    max_tokens: 256
+    temperature: 0.7
+    timeout: 60
+```
+
+Three things account for most "it won't connect" reports:
+
+- **Use the GPU box's LAN IP, never `localhost` / `127.0.0.1`.** This config is
+  read from inside a container on a different machine, so loopback resolves to
+  the xiaozhi-server container itself. (Same reason `VISION_BRIDGE_URL` in the
+  compose files wants a LAN IP.)
+- **Enable "Serve on Local Network"** in LM Studio's Developer/Server tab. The
+  default binding is localhost-only, so nothing outside that PC can reach it.
+- **Open the port in the host firewall.** On Windows, inbound TCP 1234 is
+  blocked until you allow it — this is the single most common failure.
+
+Verify from the Docker host *before* touching `.config.yaml`:
+
+```bash
+curl http://192.168.1.50:1234/v1/models
+```
+
+That confirms reachability and prints the exact model `id` string to put in the
+`model:` field — it must match what the server reports, not the display name in
+the LM Studio UI. `make doctor` does not validate this value, so a typo here
+surfaces at runtime as "My brain returned an error" from the robot.
+
+The same pattern applies to Ollama (`http://<GPU_BOX_IP>:11434/v1`, and set
+`OLLAMA_HOST=0.0.0.0` so it listens beyond loopback) or any other
+OpenAI-compatible server on a second machine.
+
+#### You do not need a GPU on the Docker host for this
+
+The CUDA block in `docker-compose.yml` is for **WhisperLocal ASR only** — it
+has nothing to do with the LLM. `make setup` detects whether the NVIDIA Docker
+runtime is present and, if it isn't, drops that block and selects FunASR on CPU
+instead. A CPU-only Docker host paired with a remote LM Studio box is a fully
+supported configuration.
+
+`compose.local.override.yml` (which does require an NVIDIA GPU and the NVIDIA
+Container Toolkit on the Docker host) is a *different* option — it runs Ollama
+in a container on the Docker host itself. If your models live on another
+machine, ignore that file entirely.
+
+#### Dropping the dotty-pi dependency
+
+Switching away from `PiVoiceLLM` means the `dotty-pi` container is no longer on
+the voice path, so xiaozhi-server no longer needs to `docker exec` into it. Once
+`selected_module.LLM` is `OpenAICompat`, comment out both of these mounts in your
+compose file — the socket mount grants the container effective root on the
+Docker host, and there's no reason to keep it once nothing uses it:
+
+```yaml
+- /var/run/docker.sock:/var/run/docker.sock
+- /usr/bin/docker:/usr/bin/docker:ro
+```
+
+The trade-off is the one in the comparison table above: `OpenAICompat` is
+stateless, so you lose persistent memory and all seven voice tools.
 
 ### Anthropic API directly (without OpenRouter)
 
