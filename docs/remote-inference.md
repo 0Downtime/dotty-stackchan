@@ -24,7 +24,7 @@ The older `NARRATIVE_*` and `VLM_*` names remain supported. No provider is
 selected automatically, so configure `selected_module.LLM: OpenAICompat` and
 do not configure a cloud fallback if local-only behavior is required.
 
-## Tailscale example
+## Tailscale or Headscale example
 
 Keep the inference process bound to loopback on the Mac and publish only the
 two required TCP ports to the tailnet:
@@ -37,6 +37,18 @@ tailscale serve --bg --tcp=18002 tcp://127.0.0.1:18002
 Do not enable Funnel. Restrict the Dotty node to these ports in the tailnet
 policy, and verify that the same services remain unreachable through the Mac's
 ordinary LAN address.
+
+With Headscale, point each Tailscale client at the self-hosted control server
+before enrollment:
+
+```sh
+tailscale login --login-server=https://headscale.example.com
+```
+
+Raw TCP forwarding is the relevant Serve mode here; it does not depend on the
+HTTPS certificate flow. Native HTTPS Serve remains a Headscale feature gap as
+of v0.29, so keep TLS termination outside this inference path. Apply the
+least-privilege port grant in Headscale's policy file and test it before reload.
 
 For the baseline stage, omit `dotty-pi` and both `/var/run/docker.sock` and the
 Docker CLI mount from xiaozhi-server. Reintroduce them only when enabling the
