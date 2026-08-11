@@ -136,6 +136,10 @@ LLM:
     url: <OPENAI_COMPAT_URL>
     api_key: <OPENAI_COMPAT_API_KEY>
     model: <OPENAI_COMPAT_MODEL>
+    # Optional Qwen/oMLX chat-template control. Set false on voice paths so
+    # hidden reasoning is not streamed into TTS. Omit for generic backends
+    # that reject chat_template_kwargs.
+    # enable_thinking: false
     # Optional spoken response when the local inference service is unavailable.
     # DOTTY_OFFLINE_REPLY overrides this value at runtime.
     offline_reply: My local brain is unavailable right now.

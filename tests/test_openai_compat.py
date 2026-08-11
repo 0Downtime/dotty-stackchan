@@ -129,6 +129,24 @@ class TestEnvironmentContract(unittest.TestCase):
             provider._offline_message(), f"{_FALLBACK} The Mac is taking a nap."
         )
 
+    def test_voice_thinking_environment_is_parsed(self):
+        with patch.dict(
+            os.environ,
+            {"DOTTY_VOICE_ENABLE_THINKING": "false"},
+            clear=False,
+        ):
+            provider = _mod.LLMProvider({"url": "http://x/v1", "model": "m"})
+        self.assertFalse(provider.enable_thinking)
+
+    def test_invalid_voice_thinking_value_is_rejected(self):
+        with patch.dict(
+            os.environ,
+            {"DOTTY_VOICE_ENABLE_THINKING": "sometimes"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "must be true or false"):
+                _mod.LLMProvider({"url": "http://x/v1", "model": "m"})
+
 
 def _sse(*contents):
     """Build SSE 'data:' lines for a sequence of delta content strings."""
@@ -183,6 +201,34 @@ class TestTurnSuffixPlacement(unittest.TestCase):
 
 
 class TestStreamEmojiOrdering(unittest.TestCase):
+
+    def test_thinking_disabled_is_sent_to_supported_backend(self):
+        provider = _mod.LLMProvider(
+            {
+                "url": "http://x/v1",
+                "model": "m",
+                "enable_thinking": False,
+            }
+        )
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.iter_lines = lambda decode_unicode=True: iter(_sse("😊 Hello"))
+        with patch.object(_mod.requests, "post", return_value=resp) as post:
+            list(provider._response_stream([{"role": "user", "content": "hi"}]))
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(
+            payload["chat_template_kwargs"], {"enable_thinking": False}
+        )
+
+    def test_thinking_option_is_omitted_for_generic_backends(self):
+        provider = _mod.LLMProvider({"url": "http://x/v1", "model": "m"})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.iter_lines = lambda decode_unicode=True: iter(_sse("😊 Hello"))
+        with patch.object(_mod.requests, "post", return_value=resp) as post:
+            list(provider._response_stream([{"role": "user", "content": "hi"}]))
+        payload = post.call_args.kwargs["json"]
+        self.assertNotIn("chat_template_kwargs", payload)
 
     def test_leading_whitespace_never_precedes_emoji(self):
         out = _patched_stream(_provider(), _sse("  ", "Hi there."))

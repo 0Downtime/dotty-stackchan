@@ -29,6 +29,20 @@ KID_MODE = os.environ.get("DOTTY_KID_MODE", "true").lower() in ("1", "true", "ye
 _TURN_SUFFIX = build_turn_suffix(KID_MODE)
 
 
+def _optional_bool(value, name):
+    """Parse an optional boolean without silently accepting typos."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 def _load_persona(path):
     """Read a persona markdown file and return its contents as a string."""
     if not path:
@@ -76,6 +90,17 @@ class LLMProvider(LLMProviderBase):
         self.max_tokens = int(config.get("max_tokens", 256))
         self.temperature = float(config.get("temperature", 0.7))
         self.timeout = float(config.get("timeout", 60))
+        # Qwen-family servers such as oMLX accept this chat-template option.
+        # Keep it optional so strictly OpenAI-compatible backends that reject
+        # unknown request fields continue to work.  Voice deployments using a
+        # reasoning model should explicitly set this to false: reasoning text
+        # must never be streamed into TTS.
+        enable_thinking = os.environ.get("DOTTY_VOICE_ENABLE_THINKING")
+        if enable_thinking is None:
+            enable_thinking = config.get("enable_thinking")
+        self.enable_thinking = _optional_bool(
+            enable_thinking, "DOTTY_VOICE_ENABLE_THINKING/enable_thinking"
+        )
         self.offline_reply = (
             os.environ.get("DOTTY_OFFLINE_REPLY")
             or config.get("offline_reply")
@@ -178,6 +203,10 @@ class LLMProvider(LLMProviderBase):
             "temperature": self.temperature,
             "stream": True,
         }
+        if self.enable_thinking is not None:
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": self.enable_thinking
+            }
         try:
             resp = requests.post(
                 self._completions_url(),

@@ -12,6 +12,10 @@ models.
 - `DOTTY_INFERENCE_URL` — base URL ending at `/v1`
 - `DOTTY_INFERENCE_API_KEY` — optional bearer token; keep it outside Git
 - `DOTTY_VOICE_MODEL` — fast model used for direct voice turns
+- `DOTTY_VOICE_ENABLE_THINKING` — optional boolean passed to Qwen/oMLX as
+  `chat_template_kwargs.enable_thinking`; set it to `false` for voice so model
+  reasoning cannot be streamed into TTS, and omit it for backends that reject
+  extra request fields
 - `DOTTY_OFFLINE_REPLY` — short local response used for timeout, connection,
   and HTTP failures
 
