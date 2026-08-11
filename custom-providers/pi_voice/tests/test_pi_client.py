@@ -17,12 +17,13 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 # Make the package importable as `pi_voice.*` regardless of cwd.
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from pi_client import PiClient, PiClientError  # noqa: E402
+from pi_client import PiClient, PiClientError, _default_pi_flags  # noqa: E402
 
 
 class FakePopen:
@@ -357,6 +358,29 @@ class TestTurnTimeout(unittest.TestCase):
             self.assertIn("timed out", str(ctx.exception))
         finally:
             client.close()
+
+
+class TestDefaultFlags(unittest.TestCase):
+    def test_appliance_defaults_remain_unchanged(self):
+        with patch.dict(os.environ, {}, clear=True):
+            flags = _default_pi_flags()
+        self.assertEqual(flags[flags.index("--provider") + 1], "ollama")
+        self.assertEqual(flags[flags.index("--model") + 1], "qwen3.5:4b")
+
+    def test_remote_provider_and_model_are_configurable(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DOTTY_PI_PROVIDER": "omlx",
+                "DOTTY_PI_MODEL": "Qwen3.5-4B-MLX-4bit",
+            },
+            clear=True,
+        ):
+            flags = _default_pi_flags()
+        self.assertEqual(flags[flags.index("--provider") + 1], "omlx")
+        self.assertEqual(
+            flags[flags.index("--model") + 1], "Qwen3.5-4B-MLX-4bit"
+        )
 
 
 if __name__ == "__main__":

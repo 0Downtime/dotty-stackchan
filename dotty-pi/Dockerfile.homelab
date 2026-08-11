@@ -1,0 +1,22 @@
+# Reproducible dotty-pi image for a fresh Docker host.  Unlike the legacy
+# Unraid deploy, this image builds the extension's native SQLite dependency
+# instead of relying on a host-preserved node_modules directory.
+FROM node:25.9-alpine3.23
+
+RUN apk add --no-cache libstdc++ \
+    && apk add --no-cache --virtual .build-deps python3 make g++ \
+    && npm install -g @earendil-works/pi-coding-agent@0.74.0
+
+WORKDIR /root/.pi/extensions/dotty-pi-ext
+COPY dotty-pi-ext/package.json dotty-pi-ext/package-lock.json ./
+RUN npm ci
+COPY dotty-pi-ext/ ./
+RUN npm test \
+    && apk del .build-deps \
+    && pi --version
+
+WORKDIR /root
+ENV PI_HOME=/root/.pi
+ENV PI_OFFLINE=1
+
+CMD ["sleep", "infinity"]
