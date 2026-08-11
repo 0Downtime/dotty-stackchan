@@ -34,6 +34,7 @@ Full policy: [`AI_TRANSPARENCY.md`](./AI_TRANSPARENCY.md).
 - **Local ASR** — FunASR SenseVoiceSmall by default, no cloud transcription. WhisperLocal auto-selects on GPU hosts (better kid-speech accuracy); SenseVoiceOnnx is a lighter low-RAM option.
 - **Local or cloud TTS** — Piper (offline) or EdgeTTS (cloud). Swap with a config change.
 - **Streaming responses** — the bridge streams LLM output to the voice pipeline for lower perceived latency.
+- **Experimental OpenAI Realtime voice** — opt-in speech-to-speech with interruption and local-agent tool delegation; automatically bypassed while Kid Mode is active. See [`docs/openai-realtime.md`](./docs/openai-realtime.md).
 - **Emoji expressions** — every response starts with an emoji that the firmware maps to a face animation (smile, laugh, sad, surprise, thinking, angry, love, sleepy, neutral).
 - **Voice tools** — the pi agent can search its memory, escalate hard questions to a bigger model, take a photo, and play songs, all mid-conversation.
 - **States, toggles & LEDs** — a six-state mutex (`idle / talk / story_time / security / sleep / dance`) plus two orthogonal toggles (`kid_mode`, `smart_mode`), all owned by the firmware StateManager and surfaced on the 12-pixel LED ring. Shipped on the active firmware fork (commit `d78118b`, 2026-04-27); the `firmware/firmware/` submodule pin in this repo lags, so flash from the active fork to get it. See "States, Toggles & LEDs" below and [`docs/modes.md`](./docs/modes.md).

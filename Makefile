@@ -392,9 +392,9 @@ doctor: ## Run health checks on config, models, and services
 # ─────────────────────────────────────────────────────────────────────
 # audit — verify "local except LLM" network claim
 # ─────────────────────────────────────────────────────────────────────
-audit: ## Audit outbound network connections (verify local-except-LLM claim)
+audit: ## Audit outbound network connections (verify explicit AI-provider-only claim)
 	@echo ""
-	@echo -e "$(BOLD)Network audit — verifying 'local except LLM' claim$(RESET)"
+	@echo -e "$(BOLD)Network audit — verifying explicit AI-provider-only claim$(RESET)"
 	@echo ""
 	@if [ -f data/.config.yaml ]; then CFG=data/.config.yaml; \
 	 elif [ -f .config.yaml ]; then CFG=.config.yaml; \
@@ -411,8 +411,8 @@ audit: ## Audit outbound network connections (verify local-except-LLM claim)
 	     PASS=$$((PASS+1)); \
 	   else \
 	     echo "$$CONNS" | while read line; do echo "  $$line"; done; \
-	     LLM=$$(echo "$$CONNS" | grep -cE "openrouter|cloudflare|anthropic" || true); \
-	     OTHER=$$(echo "$$CONNS" | grep -cvE "openrouter|cloudflare|anthropic|tailscale|100\." || true); \
+	     LLM=$$(echo "$$CONNS" | grep -cE "openrouter|cloudflare|anthropic|openai" || true); \
+	     OTHER=$$(echo "$$CONNS" | grep -cvE "openrouter|cloudflare|anthropic|openai|tailscale|100\." || true); \
 	     if [ "$$OTHER" -gt 0 ]; then \
 	       echo -e "  $(RED)FAIL$(RESET)  Unexpected external connections detected"; \
 	       FAIL=$$((FAIL+1)); \

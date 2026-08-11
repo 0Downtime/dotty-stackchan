@@ -51,6 +51,16 @@ services:
       # dotty-behaviour, dotty-pi) must carry the same value in its own
       # .env. See .env.example.
       - DOTTY_ADMIN_TOKEN=${DOTTY_ADMIN_TOKEN:-}
+      # Experimental direct speech-to-speech route. Disabled by default and
+      # always bypassed while the shared Kid Mode toggle is active.
+      - DOTTY_REALTIME_ENABLED=${DOTTY_REALTIME_ENABLED:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
+      - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
+      - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
+      - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
+      - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
+      - DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS=${DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS:-8}
     ports:
       - "8000:8000"
       - "8003:8003"
@@ -60,6 +70,7 @@ services:
       - ./tmp:/opt/xiaozhi-esp32-server/tmp
       - ./custom-providers/openai_compat:/opt/xiaozhi-esp32-server/core/providers/llm/openai_compat
       - ./custom-providers/pi_voice:/opt/xiaozhi-esp32-server/core/providers/llm/pi_voice
+      - ./custom-providers/openai_realtime:/opt/xiaozhi-esp32-server/core/providers/realtime:ro
       # PiVoiceLLM shells out to `docker exec -i dotty-pi pi --mode rpc ...`,
       # so this container needs the docker CLI binary AND the host docker
       # socket. WARNING: mounting /var/run/docker.sock gives this container

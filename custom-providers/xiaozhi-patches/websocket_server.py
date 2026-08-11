@@ -125,6 +125,19 @@ class WebSocketServer:
             self._intent,
             self,  # 传入server实例
         )
+        # DOTTY-PATCH: optional OpenAI Realtime speech-to-speech route. The
+        # wrapper is installed only when DOTTY_REALTIME_ENABLED=true; every
+        # declined message continues through ConnectionHandler unchanged.
+        _dotty_realtime = None
+        try:
+            from core.providers.realtime import attach_realtime_bridge
+
+            _dotty_realtime = attach_realtime_bridge(handler)
+        except Exception as exc:
+            self.logger.bind(tag=TAG).warning(
+                "OpenAI Realtime bridge unavailable at startup "
+                f"({type(exc).__name__}); local voice path remains active"
+            )
         # DOTTY-PATCH: register this connection so the admin HTTP route can
         # find it. Use the request header (the protocol-mandated identifier).
         _dotty_dev_id = websocket.request.headers.get("device-id", "") or ""
@@ -135,6 +148,14 @@ class WebSocketServer:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"处理连接时出错: {e}")
         finally:
+            if _dotty_realtime is not None:
+                try:
+                    await _dotty_realtime.close()
+                except Exception as realtime_close_error:
+                    self.logger.bind(tag=TAG).warning(
+                        "OpenAI Realtime bridge close failed: "
+                        f"{type(realtime_close_error).__name__}"
+                    )
             # DOTTY-PATCH: pop only if the entry still points at this handler
             # (a quick reconnect with the same device-id may have replaced it).
             if _dotty_dev_id and _dotty_active_connections.get(_dotty_dev_id) is handler:
