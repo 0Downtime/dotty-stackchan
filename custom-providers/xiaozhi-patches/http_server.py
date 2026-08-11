@@ -1,5 +1,5 @@
 import asyncio
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from config.logger import setup_logging
 from core.api.ota_handler import OTAHandler
 from core.api.vision_handler import VisionHandler
@@ -121,6 +121,44 @@ class SimpleHttpServer:
         self.vision_handler = VisionHandler(config)
 
     # DOTTY-PATCH ------------------------------------------------------------
+    async def _dotty_vision_proxy(self, request: "web.Request") -> "web.Response":
+        """Relay a device JPEG upload to the private behaviour service.
+
+        The firmware must receive a LAN-reachable URL, while dotty-behaviour's
+        port 8090 deliberately remains Docker-internal.  This narrow port-8003
+        route bridges only the vision POST body and non-secret device headers.
+        """
+        target = _os_mod.environ.get("DOTTY_VISION_PROXY_URL", "").strip()
+        if not target:
+            return web.json_response(
+                {"error": "vision proxy is not configured"}, status=503
+            )
+
+        headers = {}
+        for name in ("Content-Type", "Device-Id", "Client-Id"):
+            value = request.headers.get(name)
+            if value:
+                headers[name] = value
+
+        try:
+            body = await request.read()
+            timeout = ClientTimeout(total=90)
+            async with ClientSession(timeout=timeout) as session:
+                async with session.post(target, data=body, headers=headers) as upstream:
+                    response_body = await upstream.read()
+                    response_headers = {}
+                    content_type = upstream.headers.get("Content-Type")
+                    if content_type:
+                        response_headers["Content-Type"] = content_type
+                    return web.Response(
+                        body=response_body,
+                        status=upstream.status,
+                        headers=response_headers,
+                    )
+        except Exception as exc:
+            self.logger.bind(tag=TAG).error(f"Dotty vision proxy failed: {exc}")
+            return web.json_response({"error": "vision service unavailable"}, status=502)
+
     async def _dotty_inject_text(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/inject-text
 
@@ -638,6 +676,9 @@ class SimpleHttpServer:
                         ),
                         web.options(
                             "/mcp/vision/explain", self.vision_handler.handle_options
+                        ),
+                        web.post(
+                            "/dotty/vision/explain", self._dotty_vision_proxy
                         ),
                         # DOTTY-PATCH: admin routes for dashboard text injection.
                         web.post(

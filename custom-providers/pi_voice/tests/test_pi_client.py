@@ -157,6 +157,7 @@ class TestSpawnOnce(unittest.TestCase):
                     for cmd in fake.stdin_lines:
                         if cmd.get("type") == "new_session":
                             fake.emit({
+                                "id": cmd["id"],
                                 "type": "response", "command": "new_session",
                                 "success": True,
                             })
