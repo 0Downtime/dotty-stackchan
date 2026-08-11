@@ -11,6 +11,7 @@ core.utils.textUtils) are stubbed with controlled values so the logic is
 exercised deterministically. `requests` is real and patched per-test.
 """
 import importlib.util as _ilu
+import os
 import pathlib
 import re
 import sys
@@ -101,6 +102,32 @@ for _k, _v in _saved_modules.items():
 
 def _provider():
     return _mod.LLMProvider({"url": "http://x/v1", "model": "m"})
+
+
+class TestEnvironmentContract(unittest.TestCase):
+
+    def test_environment_overrides_endpoint_model_and_key(self):
+        env = {
+            "DOTTY_INFERENCE_URL": "http://tailnet-host:18000/v1/",
+            "DOTTY_INFERENCE_API_KEY": "local-test-key",
+            "DOTTY_VOICE_MODEL": "voice-model",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            provider = _mod.LLMProvider({"url": "http://old/v1", "model": "old"})
+        self.assertEqual(provider.base_url, "http://tailnet-host:18000/v1")
+        self.assertEqual(provider.api_key, "local-test-key")
+        self.assertEqual(provider.model, "voice-model")
+
+    def test_offline_reply_is_configurable(self):
+        with patch.dict(
+            os.environ,
+            {"DOTTY_OFFLINE_REPLY": "The Mac is taking a nap."},
+            clear=False,
+        ):
+            provider = _mod.LLMProvider({"url": "http://x/v1", "model": "m"})
+        self.assertEqual(
+            provider._offline_message(), f"{_FALLBACK} The Mac is taking a nap."
+        )
 
 
 def _sse(*contents):

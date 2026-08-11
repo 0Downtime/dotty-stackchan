@@ -136,6 +136,9 @@ LLM:
     url: <OPENAI_COMPAT_URL>
     api_key: <OPENAI_COMPAT_API_KEY>
     model: <OPENAI_COMPAT_MODEL>
+    # Optional spoken response when the local inference service is unavailable.
+    # DOTTY_OFFLINE_REPLY overrides this value at runtime.
+    offline_reply: My local brain is unavailable right now.
     # Path to a persona markdown file loaded as the system prompt.
     # Relative paths resolve from the xiaozhi-server working directory
     # inside the container (/opt/xiaozhi-esp32-server).
