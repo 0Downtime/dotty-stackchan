@@ -245,6 +245,48 @@ class TestToolCallTelemetry(unittest.TestCase):
         finally:
             client.close()
 
+    def test_execution_result_callback_receives_correlated_defensive_copy(self):
+        fake = FakePopen()
+        client = make_client(fake)
+        observed = []
+        try:
+            def feed():
+                fake.emit({
+                    "id": "turn-1", "type": "response",
+                    "command": "prompt", "success": True,
+                })
+                fake.emit({
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "toolcall_end",
+                        "toolCall": {
+                            "id": "tool-9",
+                            "name": "home_assistant_HassTurnOn",
+                            "arguments": {"name": "Kitchen"},
+                        },
+                    },
+                })
+                fake.emit({
+                    "type": "tool_execution_end",
+                    "toolCallId": "tool-9",
+                    "toolName": "home_assistant_HassTurnOn",
+                    "result": {"content": [{
+                        "type": "text",
+                        "text": "DOTTY_CONFIRMATION_REQUIRED: Confirm on Kitchen",
+                    }]},
+                    "isError": True,
+                })
+                fake.emit({"type": "agent_end"})
+
+            threading.Thread(target=feed, daemon=True).start()
+            self.assertEqual(list(client.iter_turn_text("turn it on", observed.append)), [])
+            self.assertEqual(observed[0]["arguments"], {"name": "Kitchen"})
+            self.assertTrue(observed[0]["is_error"])
+            observed[0]["arguments"]["name"] = "changed"
+            self.assertNotIn("changed", "\n".join(client.recent_stderr()))
+        finally:
+            client.close()
+
 
 class TestUiAutoCancel(unittest.TestCase):
     def test_dialog_methods_get_auto_cancelled(self):
@@ -367,6 +409,7 @@ class TestDefaultFlags(unittest.TestCase):
             flags = _default_pi_flags()
         self.assertEqual(flags[flags.index("--provider") + 1], "ollama")
         self.assertEqual(flags[flags.index("--model") + 1], "qwen3.5:4b")
+        self.assertIn("--no-builtin-tools", flags)
 
     def test_remote_provider_and_model_are_configurable(self):
         with patch.dict(

@@ -5,15 +5,18 @@ runtime. Installed inside the [`dotty-pi`](../dotty-pi/) container at
 `/root/.pi/extensions/dotty-pi-ext/`, surfaced to the agent via pi's
 extension manifest.
 
-**Status: 7 of 7 tools live.** The original five (`memory_lookup`,
+**Status: 8 native tools live.** The original five (`memory_lookup`,
 `remember`, `think_hard`, `take_photo`, `play_song`) plus the two
 person-memory tools added in #53 (`recall_person`, `remember_person`).
+`device_status` adds a correlated read of the firmware's live status. External
+MCP tools are loaded separately through a strict allowlist; see
+[`../docs/external-mcp.md`](../docs/external-mcp.md).
 `take_photo` reads from the `dotty-behaviour` daemon
 (`GET /api/voice/take_photo`). The #36 cutover executed on 2026-05-19;
 PiVoiceLLM is the live default voice path and this extension is the
 production source of truth for these tools.
 
-## The seven voice tools
+## The eight native voice tools
 
 These are the tools that voice turns invoke during conversation. The
 original five replicate the semantics of the matching `_voice_tool_*`
@@ -22,6 +25,7 @@ handler (or `/api/voice/*` endpoint) in `bridge.py`; `recall_person` /
 
 | Tool | What it does | Source-of-truth handler |
 |---|---|---|
+| `device_status()` | Correlated read of current firmware speaker, battery, screen, and network state. | xiaozhi admin `/xiaozhi/admin/device-status` |
 | `memory_lookup(query)` | FTS5 search against `brain.db`; returns top-3 snippets pipe-joined, ≤200 chars each. | `bridge.py::_voice_tool_memory_lookup` |
 | `remember(fact)` | Stores a durable fact (≤300 codepoints, trimmed) into the `memories` table with `category=core`, `importance=0.7`. Mirrors bridge.py's `/api/voice/remember` HTTP endpoint, but called as a tool from inside the agent loop rather than as a side-channel POST. | `bridge.py::voice_remember` (`/api/voice/remember`) |
 | `recall_person(name)` | Reads up to 6 approved per-person facts from the `person:<id>` namespace in `brain.db` (case-insensitive name match), each ≤200 chars, pipe-joined. The pi runtime has no system-prompt-injection seam, so per-person memory is surfaced as a tool rather than bridge.py's injected `[Person memory]` block. | pi-native (#53) |
@@ -87,8 +91,9 @@ dotty-pi-ext/
 ├── README.md             # this file
 ├── package.json          # pi extension manifest
 ├── src/
-│   ├── index.ts          # entry: registers the 7 tools, wires the agent_end logger
+│   ├── index.ts          # entry: native tools, MCP adapter, policy, turn logger
 │   ├── tools/
+│   │   ├── device_status.ts
 │   │   ├── memory_lookup.ts
 │   │   ├── remember.ts
 │   │   ├── recall_person.ts
@@ -101,7 +106,9 @@ dotty-pi-ext/
 │       ├── dotty_behaviour.ts # dotty-behaviour client (person-review classifier, take_photo)
 │       ├── llama_swap.ts      # llama-swap client (think_hard escalation)
 │       ├── turn_logger.ts     # agent_end per-turn conversation auto-log
-│       └── xiaozhi_admin.ts   # admin-endpoint client (songs catalogue, play-asset, MCP dispatch)
+│       └── xiaozhi_admin.ts   # admin client (status, songs, asset dispatch)
+│   ├── mcp/              # isolated config loader + hermetic pilot server
+│   └── policy/           # pre-transport Home Assistant confirmation gate
 └── tests/                # per-tool contract tests against the bridge.py reference
 ```
 

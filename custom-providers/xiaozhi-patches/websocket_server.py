@@ -135,6 +135,21 @@ class WebSocketServer:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"处理连接时出错: {e}")
         finally:
+            # DOTTY-PATCH: scope any light confirmation to this live voice
+            # connection. Reset Pi on disconnect so approval cannot survive a
+            # reconnect, even if a client reuses an identifier.
+            cancel_confirmation = getattr(
+                self._llm, "cancel_pending_confirmation", None,
+            )
+            if callable(cancel_confirmation):
+                try:
+                    await asyncio.to_thread(
+                        cancel_confirmation, getattr(handler, "session_id", None),
+                    )
+                except Exception as cancel_error:
+                    self.logger.bind(tag=TAG).error(
+                        f"取消待确认操作时出错: {cancel_error}"
+                    )
             # DOTTY-PATCH: pop only if the entry still points at this handler
             # (a quick reconnect with the same device-id may have replaced it).
             if _dotty_dev_id and _dotty_active_connections.get(_dotty_dev_id) is handler:
