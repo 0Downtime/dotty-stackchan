@@ -161,7 +161,7 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	 } > $(WIZARD_ENV); \
 	 echo "  $(WIZARD_ENV) — done"; \
 	 echo ""; \
-	 echo -e "$(BOLD)Ensuring .env + admin-API token...$(RESET)"; \
+	 echo -e "$(BOLD)Ensuring .env + service secrets...$(RESET)"; \
 	 if [ ! -f .env ]; then \
 	   cp .env.example .env; \
 	   echo "  .env created from .env.example"; \
@@ -175,6 +175,13 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	   echo -e "  $(YELLOW)NOTE:$(RESET) set the SAME value in the bridge / dotty-behaviour /"; \
 	   echo "        dotty-pi deploy-dir .env files, or their admin calls will 401."; \
 	   echo "        See .env.example ('Admin API auth') for details."; \
+	 fi; \
+	 if grep -q '^DOTTY_CSRF_SECRET=' .env; then \
+	   echo -e "  $(GREEN)DOTTY_CSRF_SECRET already present in .env — keeping it.$(RESET)"; \
+	 else \
+	   CSRF_SECRET=$$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); \
+	   printf '\nDOTTY_CSRF_SECRET=%s\n' "$$CSRF_SECRET" >> .env; \
+	   echo "  generated DOTTY_CSRF_SECRET → .env (persists dashboard CSRF tokens)"; \
 	 fi; \
 	 echo ""; \
 	 echo -e "$(BOLD)Rendering templates...$(RESET)"; \
