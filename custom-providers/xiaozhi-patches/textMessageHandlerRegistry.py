@@ -64,6 +64,21 @@ class EventTextMessageHandler(TextMessageHandler):
         except Exception:
             pass
 
+        event_name = msg_json.get("name", "")
+        if event_name == "face_pack_changed":
+            try:
+                event_data = msg_json.get("data") or {}
+                conn._dotty_requested_face_pack = str(event_data.get("requested_id") or "")
+                conn._dotty_active_face_pack = str(event_data.get("active_id") or "")
+                conn._dotty_face_pack_success = bool(event_data.get("success"))
+                conn._dotty_face_pack_reason = str(event_data.get("reason") or "")
+                conn._dotty_face_pack_pending = not (
+                    conn._dotty_face_pack_success
+                    and conn._dotty_active_face_pack == conn._dotty_requested_face_pack
+                )
+            except Exception:
+                pass
+
         bridge_url = (
             os.environ.get("BRIDGE_URL")
             or os.environ.get("VISION_BRIDGE_URL", "")
@@ -88,7 +103,6 @@ class EventTextMessageHandler(TextMessageHandler):
         # By the time the user actually speaks, the description is
         # usually ready; if not, the voice turn just goes out without
         # `[Room view]` (no added voice-turn latency either way).
-        event_name = msg_json.get("name", "")
         if event_name == "face_lost":
             try:
                 conn._room_description = None

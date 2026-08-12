@@ -45,6 +45,7 @@ services:
       # and the firmware pips desync from the dashboard on every reconnect.
       - DOTTY_KID_MODE_STATE=/var/lib/dotty-bridge/state/kid-mode
       - DOTTY_SMART_MODE_STATE=/var/lib/dotty-bridge/state/smart-mode
+      - DOTTY_FACE_BUNDLE_STATE=/var/lib/dotty-bridge/state/face-bundles.json
       # Shared admin-API secret (X-Admin-Token). Read from ./.env — `make
       # setup` generates it. Unset/empty = permissive (admin routes open);
       # set = this server enforces it AND every caller (bridge,
@@ -95,6 +96,7 @@ services:
       # DOTTY DeviceCommand seam: MCP request ids + envelope + per-conn
       # serialized sends, shared by http_server.py + receiveAudioHandle.py
       - ./custom-providers/xiaozhi-patches/device_command.py:/opt/xiaozhi-esp32-server/core/utils/device_command.py:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
       - ./songs:/opt/xiaozhi-esp32-server/config/assets/songs:ro
       # DOTTY portal: admin /inject-text route + active-connection registry
       - ./custom-providers/xiaozhi-patches/portal_bridge.py:/opt/xiaozhi-esp32-server/core/portal_bridge.py:ro

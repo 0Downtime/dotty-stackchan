@@ -37,6 +37,7 @@ from pathlib import Path
 _state_dir = Path(tempfile.mkdtemp(prefix="dotty-bridge-test-state-"))
 os.environ.setdefault("DOTTY_KID_MODE_STATE", str(_state_dir / "kid-mode"))
 os.environ.setdefault("DOTTY_SMART_MODE_STATE", str(_state_dir / "smart-mode"))
+os.environ.setdefault("DOTTY_FACE_BUNDLE_STATE", str(_state_dir / "face-bundles.json"))
 
 _repo_root = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
@@ -61,6 +62,10 @@ bridge_app.app.router.lifespan_context = _noop_lifespan
 
 from fastapi.testclient import TestClient  # noqa: E402
 client = TestClient(bridge_app.app)
+
+import bridge.csrf as csrf_mod  # noqa: E402
+import bridge.dashboard as dashboard_mod  # noqa: E402
+from bridge.face_bundles import FaceBundleStore  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +95,81 @@ class DashboardRenderFixTests(unittest.TestCase):
         # must describe the pending-v2 state, not name a defunct model.
         body = client.get("/ui/smart-mode").text
         self.assertIn("model-swap pending", body)
+
+
+class FaceBundleRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.original_store = dashboard_mod._FACE_BUNDLE_STORE
+        self.original_admin = dashboard_mod._face_admin_request
+        dashboard_mod._FACE_BUNDLE_STORE = FaceBundleStore(
+            Path(self.temporary.name) / "face-bundles.json"
+        )
+        dashboard_mod._face_admin_request = (
+            lambda *_args, **_kwargs: (202, {"ok": True, "device_id": "dev-1"})
+        )
+        dashboard_mod._state["kid_mode_getter"] = lambda: False
+
+        async def set_kid_mode(_enabled):
+            return {"ok": True}
+
+        dashboard_mod._state["kid_mode_setter"] = set_kid_mode
+        self.client = TestClient(bridge_app.app)
+        self.client.get("/ui")
+        self.token = csrf_mod._unsign(
+            self.client.cookies[csrf_mod.COOKIE_NAME]
+        )
+
+    def tearDown(self):
+        dashboard_mod._FACE_BUNDLE_STORE = self.original_store
+        dashboard_mod._face_admin_request = self.original_admin
+        self.temporary.cleanup()
+
+    def post(self, path, data):
+        return self.client.post(
+            path, data=data, headers={"X-CSRF-Token": self.token or ""},
+        )
+
+    def test_visual_only_change_applies_without_confirmation(self):
+        response = self.post(
+            "/ui/actions/face-bundle/preview",
+            {"bundle_id": "crt-pixel", "device_id": "dev-1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("waiting for the device", response.text)
+        self.assertNotIn("Confirm CRT", response.text)
+
+    def test_voice_route_change_requires_confirmation(self):
+        response = self.post(
+            "/ui/actions/face-bundle/preview",
+            {"bundle_id": "aussie-host", "device_id": "dev-1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Confirm Aussie Host", response.text)
+        self.assertIn("Realtime Marin", response.text)
+
+    def test_kid_bot_requires_confirmation_to_enable_kid_mode(self):
+        response = self.post(
+            "/ui/actions/face-bundle/preview",
+            {"bundle_id": "kid-bot", "device_id": "dev-1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Confirm Kid Bot", response.text)
+        self.assertIn("Kid Mode will be enabled", response.text)
+
+    def test_offline_apply_keeps_desired_bundle_pending(self):
+        dashboard_mod._face_admin_request = (
+            lambda *_args, **_kwargs: (503, {"error": "no device connected"})
+        )
+        response = self.post(
+            "/ui/actions/face-bundle/apply",
+            {"bundle_id": "crt-pixel", "device_id": "dev-offline"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("waiting for the device", response.text)
+        record = dashboard_mod._FACE_BUNDLE_STORE.get("dev-offline")
+        self.assertEqual(record["bundle_id"], "crt-pixel")
+        self.assertTrue(record["pending"])
 
 
 # ---------------------------------------------------------------------------
