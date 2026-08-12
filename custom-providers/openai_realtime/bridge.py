@@ -209,6 +209,7 @@ class OpenAIRealtimeBridge:
         self._tts_started = False
         self._transcript = ""
         self._warned_missing_key = False
+        self._session_listen_mode: str | None = None
 
     @property
     def connected(self) -> bool:
@@ -281,10 +282,26 @@ class OpenAIRealtimeBridge:
             }
         ]
 
+    def _listen_mode(self) -> str:
+        return str(getattr(self.conn, "client_listen_mode", "") or "").strip().lower()
+
+    def _uses_server_vad(self) -> bool:
+        return self._listen_mode() in {"auto", "realtime"}
+
     def _session_update(self) -> dict[str, Any]:
+        turn_detection = None
+        if self._uses_server_vad():
+            turn_detection = {
+                "type": "server_vad",
+                "threshold": 0.5,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 500,
+                "create_response": True,
+                "interrupt_response": True,
+            }
         input_audio: dict[str, Any] = {
             "format": {"type": "audio/pcm", "rate": _OUTPUT_RATE},
-            "turn_detection": None,
+            "turn_detection": turn_detection,
         }
         if self.settings.transcription_model:
             input_audio["transcription"] = {
@@ -319,11 +336,20 @@ class OpenAIRealtimeBridge:
                 )
                 self._warned_missing_key = True
             return False
-        if self.connected and not self._receiver_task.done():
+        desired_listen_mode = self._listen_mode()
+        if (
+            self.connected
+            and not self._receiver_task.done()
+            and self._session_listen_mode == desired_listen_mode
+        ):
             return True
 
         async with self._connect_lock:
-            if self.connected and not self._receiver_task.done():
+            if (
+                self.connected
+                and not self._receiver_task.done()
+                and self._session_listen_mode == desired_listen_mode
+            ):
                 return True
             await self._disconnect(send_device_stop=False)
             self._closed = False
@@ -350,6 +376,7 @@ class OpenAIRealtimeBridge:
                     self._updated_event.wait(),
                     timeout=self.settings.event_timeout_seconds,
                 )
+                self._session_listen_mode = desired_listen_mode
             except Exception as exc:
                 self._log(
                     "warning",
@@ -393,6 +420,12 @@ class OpenAIRealtimeBridge:
     async def push_opus(self, packet: bytes) -> bool:
         if not self._active_input or self._ws is None or self._codec is None:
             return False
+        # Keep this route half-duplex while Dotty is speaking. The device's
+        # acoustic echo cancellation is not strong enough to guarantee that
+        # its own speaker audio will not retrigger server VAD, which can cause
+        # a response loop. Consume (drop) mic frames until playback finishes.
+        if self._response_active or self._tts_started:
+            return True
         try:
             pcm24 = self._codec.decode_input_opus(packet)
             if pcm24:
@@ -417,6 +450,8 @@ class OpenAIRealtimeBridge:
         if not self._active_input:
             return False
         self._active_input = False
+        if self._uses_server_vad():
+            return True
         if self._input_packets == 0:
             return True
         try:
@@ -742,6 +777,7 @@ class OpenAIRealtimeBridge:
         self._receiver_task = None
         self._player_task = None
         self._codec = None
+        self._session_listen_mode = None
         self._active_input = False
         self._response_active = False
         self._drain_output_queue()

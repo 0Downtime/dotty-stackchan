@@ -252,6 +252,7 @@ class TestOpenAIRealtime(unittest.TestCase):
     def test_voice_turn_translates_opus_and_commits(self):
         async def run():
             conn = _Connection()
+            conn.client_listen_mode = "manual"
             upstream = _RealtimeWebSocket()
             codec = _Codec()
             captured = {}
@@ -279,7 +280,7 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertEqual(append["audio"], "cGNtMjQ=")
             self.assertEqual(codec.decoded, [b"opus16"])
             self.assertEqual(conn.original_messages, [])
-            self.assertEqual(conn.client_listen_mode, "auto")
+            self.assertEqual(conn.client_listen_mode, "manual")
             self.assertNotIn("device-private-id", captured["headers"]["OpenAI-Safety-Identifier"])
             self.assertEqual(len(captured["headers"]["OpenAI-Safety-Identifier"]), 64)
             session = upstream.sent[0]["session"]
@@ -288,6 +289,49 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertEqual(session["audio"]["output"]["format"]["rate"], 24000)
             self.assertEqual(session["tools"][0]["name"], "consult_dotty_local_agent")
             self.assertIn("do not speak or output an emoji", session["instructions"])
+            await bridge.close()
+
+        asyncio.run(run())
+
+    def test_auto_mode_uses_server_vad_without_waiting_for_listen_stop(self):
+        async def run():
+            conn = _Connection()
+            upstream = _RealtimeWebSocket()
+
+            async def connect(_url, _headers):
+                return upstream
+
+            bridge = _MODULE.attach_realtime_bridge(
+                conn,
+                _settings(),
+                connect_factory=connect,
+                codec_factory=_Codec,
+            )
+            await conn._route_message(
+                json.dumps({"type": "listen", "state": "start", "mode": "auto"})
+            )
+            await conn._route_message(b"opus16")
+
+            turn_detection = upstream.sent[0]["session"]["audio"]["input"][
+                "turn_detection"
+            ]
+            self.assertEqual(turn_detection["type"], "server_vad")
+            self.assertTrue(turn_detection["create_response"])
+            self.assertTrue(turn_detection["interrupt_response"])
+            event_types = [event["type"] for event in upstream.sent]
+            self.assertIn("input_audio_buffer.append", event_types)
+            self.assertNotIn("input_audio_buffer.commit", event_types)
+            self.assertNotIn("response.create", event_types)
+            self.assertTrue(bridge.active_input)
+
+            bridge._response_active = True
+            append_count = event_types.count("input_audio_buffer.append")
+            await conn._route_message(b"speaker-echo")
+            current_types = [event["type"] for event in upstream.sent]
+            self.assertEqual(
+                current_types.count("input_audio_buffer.append"), append_count
+            )
+            self.assertEqual(conn.original_messages, [])
             await bridge.close()
 
         asyncio.run(run())

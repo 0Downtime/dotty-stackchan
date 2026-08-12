@@ -85,9 +85,15 @@ StackChan microphone (Opus 16 kHz)
   -> StackChan speaker
 ```
 
-The device's `listen start` / `listen stop` messages provide push-to-talk turn
-boundaries. The bridge disables OpenAI server VAD for this route, clears the
-input buffer on start, commits it on stop, then sends `response.create`.
+For firmware `mode: "auto"` / `"realtime"`, OpenAI server VAD detects the end
+of speech and creates the response automatically; these modes do not reliably
+emit a device-side `listen stop`. Manual listening keeps explicit push-to-talk
+boundaries: the bridge clears the input buffer on start, commits it on stop,
+then sends `response.create`.
+
+The bridge runs half-duplex during response playback: it consumes but drops
+microphone frames while Dotty is speaking. This prevents the robot's speaker
+from retriggering server VAD and creating an acoustic response loop.
 
 When the user interrupts playback, the bridge:
 
