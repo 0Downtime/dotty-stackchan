@@ -285,8 +285,12 @@ class TestLeadingEmojiContract(unittest.TestCase):
         self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
 
     def test_disallowed_single_codepoint_emoji_is_replaced(self):
-        out = self._response(["😂 Hello"])
+        out = self._response(["🦄 Hello"])
         self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
+
+    def test_new_canonical_face_emoji_is_preserved(self):
+        out = self._response(["😂 Hello"])
+        self.assertEqual("".join(out), "😂 Hello")
 
     def test_empty_model_stream_gets_emoji_fallback(self):
         out = self._response([])

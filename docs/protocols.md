@@ -8,7 +8,7 @@ description: Xiaozhi WebSocket protocol, pi RPC transport, emotion frame format,
 ## TL;DR
 
 - **Xiaozhi WebSocket protocol** — between device and xiaozhi-server. Opus audio + JSON control frames. Supports MCP over JSON-RPC 2.0 in-band. Canonical spec: `github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md`.
-- **Emotion channel** — 21 upstream emotion identifiers; the server picks one from the LLM's leading emoji and emits a separate `llm`-type frame. This stack uses a 9-emoji subset.
+- **Emotion channel** — all 21 identifiers are enabled; the server picks one from the LLM's leading emoji or the authenticated deterministic admin route and emits a separate `llm` frame.
 - **MCP over WS** — the device acts as an MCP server; xiaozhi-server calls `tools/list` and `tools/call` against it. Tool names use dotted namespaces like `self.audio_speaker.set_volume`.
 - **pi RPC** — `PiClient` ↔ the dotty-pi agent communicate as JSONL messages over the stdin/stdout of `docker exec -i dotty-pi pi --mode rpc`. This is the voice transport for the default `PiVoiceLLM` provider.
 - **HTTP APIs** — split across two services: dotty-behaviour (:8090) serves perception, vision, audio, and calendar endpoints; bridge.py (:8081) serves the admin dashboard `/ui` and admin routes.
@@ -141,13 +141,15 @@ Server emits a dedicated `llm`-type frame:
 
 ### Default emoji allowlist
 
-The persona prompt and xiaozhi-server's top-level `prompt:` block enforce the following 9-emoji subset:
+The live provider advertises the full canonical 21-face catalog. It also
+accepts the four legacy aliases 😊, 😢, 😮, and 😐.
 
-```
-😊 😆 😢 😮 🤔 😠 😐 😍 😴
-```
+`POST /xiaozhi/admin/set-emotion` accepts a canonical ID and optional
+`device_id`. It is covered by the same `X-Admin-Token` middleware as every
+other `/xiaozhi/admin/*` route and sends the normal emotion frame directly.
 
-Smaller set = more predictable face animations, fewer corner-cases in the xiaozhi emoji-stripper.
+The exact ordered IDs and emoji are documented in
+[`emoji-mapping.md`](emoji-mapping.md).
 
 ### Two-layer enforcement
 

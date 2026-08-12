@@ -11,6 +11,17 @@ from core.portal_bridge import active_connections as _dotty_active_connections
 # envelope + per-conn serialized sends live in one module shared with
 # receiveAudioHandle.py (mounted at core/utils/device_command.py).
 from core.utils import device_command as _dotty_device_command
+try:
+    from core.utils.textUtils import FACE_EMOJI_BY_ID
+except ImportError:  # standalone source/unit-test loading outside container
+    FACE_EMOJI_BY_ID = dict((face_id, emoji) for emoji, face_id in (
+        ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"), ("😂", "funny"),
+        ("😔", "sad"), ("😠", "angry"), ("😭", "crying"), ("😍", "loving"),
+        ("😳", "embarrassed"), ("😲", "surprised"), ("😱", "shocked"),
+        ("🤔", "thinking"), ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+        ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+        ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+    ))
 
 TAG = __name__
 
@@ -191,6 +202,39 @@ class SimpleHttpServer:
     async def _dotty_list_devices(self, request: "web.Request") -> "web.Response":
         """GET /xiaozhi/admin/devices — list connected device-ids."""
         return web.json_response({"devices": list(_dotty_active_connections)})
+
+    async def _dotty_set_emotion(self, request: "web.Request") -> "web.Response":
+        """Send one validated canonical face frame directly to the device."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": "JSON object required"}, status=400)
+        emotion = (data.get("emotion") or "").strip()
+        device_id = (data.get("device_id") or "").strip()
+        emoji = FACE_EMOJI_BY_ID.get(emotion)
+        if emoji is None:
+            return web.json_response(
+                {"error": "unknown emotion", "allowed": list(FACE_EMOJI_BY_ID)},
+                status=400,
+            )
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        frame = {
+            "type": "llm",
+            "text": emoji,
+            "emotion": emotion,
+            "session_id": getattr(conn, "session_id", ""),
+        }
+        await _dotty_device_command.send_serialized(conn, __import__("json").dumps(frame))
+        return web.json_response({
+            "ok": True,
+            "device_id": _dotty_conn_device_id(conn, device_id),
+            "emotion": emotion,
+            "emoji": emoji,
+        })
 
     async def _dotty_abort(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/abort  Body: {"device_id": "<optional>"}
@@ -721,6 +765,10 @@ class SimpleHttpServer:
                         web.post(
                             "/xiaozhi/admin/say",
                             self._dotty_say,
+                        ),
+                        web.post(
+                            "/xiaozhi/admin/set-emotion",
+                            self._dotty_set_emotion,
                         ),
                     ]
                 )

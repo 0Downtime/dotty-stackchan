@@ -186,12 +186,12 @@ sequenceDiagram
 
 The firmware retries the OTA check up to 10 times with exponential backoff (starting at 10 s, doubling each retry) before giving up.
 
-> **Firmware updates over OTA are not set up in this project.** This deployment
-> doesn't host firmware binaries, so the OTA response carries no `firmware`
-> section — the endpoint is used purely for WebSocket discovery + clock sync.
-> Flashing is done over USB-C (see the "Firmware iteration" section in
-> `CLAUDE.md`). The schema above documents the protocol the firmware *can*
-> parse, not a flow that's wired up here.
+> **Firmware updates over OTA are opt-in.** The patched server advertises a
+> newer image placed in `data/bin/` using `<model>_<version>.bin`; otherwise the
+> OTA response carries no `firmware`
+> section. When an image is advertised, the device downloads and writes only
+> the inactive OTA application partition, then reboots into it. USB-C remains
+> the last-resort recovery path.
 
 ## Manual testing
 
@@ -257,7 +257,7 @@ Common failure modes:
 
 - **Server-side OTA handler is opaque.** The xiaozhi-esp32-server's OTA handler is part of the upstream Python codebase (not our custom provider code). We have not audited what it returns beyond what the firmware parses. The response schema documented here is reconstructed from the client side.
 
-- **Firmware binary hosting is not configured.** Our deployment does not currently host firmware binaries for OTA updates. The `firmware` section in the OTA response is presumably empty or absent. To enable OTA firmware updates, you would need to host the `.bin` file and configure the server to advertise it.
+- **Firmware binary hosting is deliberate.** Only OTA-safe application images are placed in `data/bin/`, their SHA-256 is verified before reboot, and the previous image is retained for recovery. Remove the advertised file to stop offering it.
 
 - **Clock sync depends on OTA.** The device's only clock source is `server_time` in the OTA response. If the OTA endpoint is unreachable, the device runs with an unset clock. This affects logging timestamps but has no known functional impact.
 

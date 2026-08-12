@@ -417,17 +417,18 @@ async def dashboard(request: Request) -> Any:
     )
 
 
-_ALLOWED_EMOJIS = ("😊", "😆", "😢", "😮", "🤔", "😠", "😐", "😍", "😴")
+_FACE_CATALOG = (
+    ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"),
+    ("😂", "funny"), ("😔", "sad"), ("😠", "angry"),
+    ("😭", "crying"), ("😍", "loving"), ("😳", "embarrassed"),
+    ("😲", "surprised"), ("😱", "shocked"), ("🤔", "thinking"),
+    ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+    ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+    ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+)
+_ALLOWED_EMOJIS = tuple(emoji for emoji, _ in _FACE_CATALOG)
 _EMOJI_FACE_NAMES = {
-    "😊": "happy",
-    "😆": "laughing",
-    "😢": "sad",
-    "😮": "surprised",
-    "🤔": "thinking",
-    "😠": "angry",
-    "😐": "neutral",
-    "😍": "loving",
-    "😴": "sleepy",
+    emoji: face_id for emoji, face_id in _FACE_CATALOG
 }
 
 # Songs live on the xiaozhi-server filesystem at this absolute container path
@@ -570,20 +571,25 @@ async def mood(request: Request, emoji: str = Form(...)) -> Any:
             request, "say_result.html",
             {"ok": False, "error": "Unknown emoji."},
         )
-    name = _EMOJI_FACE_NAMES.get(emoji, "")
-    if emoji == "😠" and name == "angry":
-        kid_getter = _state.get("kid_mode_getter")
-        kid_on = bool(kid_getter()) if kid_getter else True
-        if not kid_on:
-            name = "war"
-    if name:
-        prompt = (
-            f"Make the {emoji} face. Reply with exactly: "
-            f"'{emoji} This is my {name} face.' — nothing else."
-        )
-    else:
-        prompt = f"Make the {emoji} face. Reply with just '{emoji} ok'."
-    return await _inject_or_error(request, prompt, label=f"make the {emoji} face")
+    name = _EMOJI_FACE_NAMES[emoji]
+    if not XIAOZHI_HOST:
+        return templates.TemplateResponse(request, "say_result.html", {"ok": False, "error": "Xiaozhi host is not configured."})
+    url = f"http://{XIAOZHI_HOST}:{XIAOZHI_OTA_PORT}/xiaozhi/admin/set-emotion"
+
+    def _send() -> tuple[bool, str]:
+        try:
+            response = requests.post(url, json={"emotion": name}, headers=_xiaozhi_admin_headers(), timeout=4)
+            if response.ok:
+                return True, ""
+            return False, f"Xiaozhi returned HTTP {response.status_code}."
+        except requests.RequestException as exc:
+            return False, str(exc)
+
+    ok, error = await asyncio.to_thread(_send)
+    return templates.TemplateResponse(request, "say_result.html", {
+        "ok": ok, "error": error,
+        "sent": f"{emoji} {name}", "response": "Face sent directly." if ok else "",
+    })
 
 
 @router.post("/actions/dance", response_class=HTMLResponse, include_in_schema=False)
@@ -2144,5 +2150,3 @@ async def events_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
-
-
