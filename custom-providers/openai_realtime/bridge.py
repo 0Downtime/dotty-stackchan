@@ -77,6 +77,8 @@ class RealtimeSettings:
     base_url: str = "wss://api.openai.com/v1/realtime"
     connect_timeout_seconds: float = 10.0
     event_timeout_seconds: float = 8.0
+    web_search_enabled: bool = False
+    tavily_api_key: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls) -> "RealtimeSettings":
@@ -102,6 +104,10 @@ class RealtimeSettings:
             event_timeout_seconds=_env_float(
                 "DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS", 8.0, 1.0
             ),
+            web_search_enabled=_env_bool(
+                "DOTTY_REALTIME_WEB_SEARCH_ENABLED", False
+            ),
+            tavily_api_key=os.environ.get("TAVILY_API_KEY", "").strip(),
         )
 
     @property
@@ -251,36 +257,53 @@ class OpenAIRealtimeBridge:
             "Reply in natural spoken English without markdown, lists, emoji names, "
             "or stage directions. Keep ordinary replies to one or two short sentences. "
             "Do not claim a local action, memory lookup, camera result, device status, "
-            "or song succeeded unless you used the consult_dotty_local_agent tool."
+            "or song succeeded unless you used the consult_dotty_local_agent tool. "
+            "For current events or facts that may have changed, use the Tavily web "
+            "search tool when it is available and briefly name the sources you relied on."
         )
         return f"{base}\n\n{realtime_rules}" if base else realtime_rules
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
         llm = getattr(self.conn, "llm", None)
-        if not callable(getattr(llm, "response", None)):
-            return []
-        return [
-            {
-                "type": "function",
-                "name": "consult_dotty_local_agent",
-                "description": (
-                    "Use Dotty's private local agent for remembered facts, current "
-                    "device status or control, camera/photo requests, songs, or deeper "
-                    "reasoning. Do not use it for greetings or ordinary conversation."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "request": {
-                            "type": "string",
-                            "description": "The user's request, with relevant context.",
-                        }
+        if callable(getattr(llm, "response", None)):
+            tools.append(
+                {
+                    "type": "function",
+                    "name": "consult_dotty_local_agent",
+                    "description": (
+                        "Use Dotty's private local agent for remembered facts, current "
+                        "device status or control, camera/photo requests, songs, or deeper "
+                        "reasoning. Do not use it for greetings or ordinary conversation."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "request": {
+                                "type": "string",
+                                "description": "The user's request, with relevant context.",
+                            }
+                        },
+                        "required": ["request"],
+                        "additionalProperties": False,
                     },
-                    "required": ["request"],
-                    "additionalProperties": False,
-                },
-            }
-        ]
+                }
+            )
+        if self.settings.web_search_enabled and self.settings.tavily_api_key:
+            tools.append(
+                {
+                    "type": "mcp",
+                    "server_label": "tavily_web",
+                    "server_description": (
+                        "Read-only Internet search for current facts and news."
+                    ),
+                    "server_url": "https://mcp.tavily.com/mcp/",
+                    "authorization": f"Bearer {self.settings.tavily_api_key}",
+                    "allowed_tools": ["tavily_search"],
+                    "require_approval": "never",
+                }
+            )
+        return tools
 
     def _listen_mode(self) -> str:
         return str(getattr(self.conn, "client_listen_mode", "") or "").strip().lower()
@@ -581,6 +604,15 @@ class OpenAIRealtimeBridge:
             return
         if event_type == "session.updated":
             self._updated_event.set()
+            return
+        if event_type == "mcp_list_tools.completed":
+            self._log("info", "OpenAI Realtime web-search MCP tools ready")
+            return
+        if event_type == "mcp_list_tools.failed":
+            self._log("error", "OpenAI Realtime web-search MCP tool import failed")
+            return
+        if event_type == "response.mcp_call.failed":
+            self._log("error", "OpenAI Realtime web-search MCP call failed")
             return
         if event_type == "conversation.item.input_audio_transcription.completed":
             transcript = str(event.get("transcript", "")).strip()

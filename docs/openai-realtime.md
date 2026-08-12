@@ -53,6 +53,19 @@ DOTTY_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
 DOTTY_REALTIME_REASONING_EFFORT=low
 ```
 
+Optional read-only Internet search uses Tavily's official remote MCP server:
+
+```dotenv
+DOTTY_REALTIME_WEB_SEARCH_ENABLED=true
+TAVILY_API_KEY=your-tavily-deployment-secret
+```
+
+Only `tavily_search` is imported into the Realtime session. OpenAI calls the
+remote MCP server directly, so no home-lab listener or public tunnel is needed.
+The MCP server receives tool arguments selected by the model, not the complete
+Realtime conversation. Keep the key in the deployment secret file; never put
+it in Compose YAML or commit it.
+
 Input transcription is optional and is separate from the model's ability to
 understand microphone audio. Set `DOTTY_REALTIME_TRANSCRIPTION_MODEL=` to omit
 the transcript stream when that model is unavailable or has a lower rate
@@ -135,9 +148,11 @@ After deployment, validate behavior rather than configuration text alone:
    retains sensible conversation context.
 5. Ask for current device status or a remembered fact and confirm the local
    agent tool runs before the spoken answer.
-6. Turn Kid Mode on during a response and confirm audio stops, followed by a
+6. With web search enabled, ask for a current fact and confirm logs show
+   `OpenAI Realtime web-search MCP tools ready` before the spoken answer.
+7. Turn Kid Mode on during a response and confirm audio stops, followed by a
    successful local-path turn.
-7. Temporarily remove or invalidate the deployment key, recreate the service,
+8. Temporarily remove or invalidate the deployment key, recreate the service,
    and confirm a local response still succeeds.
 
 The repository test suite uses fake WebSockets and codecs; it does not call

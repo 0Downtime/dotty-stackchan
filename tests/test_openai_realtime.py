@@ -176,11 +176,48 @@ class TestOpenAIRealtime(unittest.TestCase):
         self.env.stop()
 
     def test_settings_do_not_reveal_api_key(self):
-        settings = _settings()
+        settings = _settings(tavily_api_key="tavily-secret-test-key")
         self.assertNotIn("secret-test-key", repr(settings))
+        self.assertNotIn("tavily-secret-test-key", repr(settings))
         self.assertIn("gpt-realtime-2.1-mini", settings.websocket_url)
         proxied = _settings(base_url="wss://example.test/realtime?tenant=dotty")
         self.assertIn("?tenant=dotty&model=", proxied.websocket_url)
+
+    def test_web_search_uses_narrow_read_only_remote_mcp_tool(self):
+        conn = _Connection()
+        bridge = _MODULE.OpenAIRealtimeBridge(
+            conn,
+            _settings(
+                web_search_enabled=True,
+                tavily_api_key="tavily-secret-test-key",
+            ),
+            codec_factory=_Codec,
+        )
+        tools = bridge._session_update()["session"]["tools"]
+        self.assertEqual(len(tools), 2)
+        web = tools[1]
+        self.assertEqual(web["type"], "mcp")
+        self.assertEqual(web["server_label"], "tavily_web")
+        self.assertEqual(web["server_url"], "https://mcp.tavily.com/mcp/")
+        self.assertEqual(web["authorization"], "Bearer tavily-secret-test-key")
+        self.assertEqual(web["allowed_tools"], ["tavily_search"])
+        self.assertEqual(web["require_approval"], "never")
+
+    def test_web_search_stays_disabled_without_both_opt_in_and_key(self):
+        conn = _Connection()
+        for settings in (
+            _settings(web_search_enabled=False, tavily_api_key="present"),
+            _settings(web_search_enabled=True, tavily_api_key=""),
+        ):
+            bridge = _MODULE.OpenAIRealtimeBridge(
+                conn,
+                settings,
+                codec_factory=_Codec,
+            )
+            self.assertEqual(
+                [tool["name"] for tool in bridge._tool_definitions()],
+                ["consult_dotty_local_agent"],
+            )
 
     def test_transcription_can_be_disabled_without_disabling_voice(self):
         conn = _Connection()
