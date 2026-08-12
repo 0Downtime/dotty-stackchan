@@ -282,17 +282,21 @@ class OpenAIRealtimeBridge:
         ]
 
     def _session_update(self) -> dict[str, Any]:
+        input_audio: dict[str, Any] = {
+            "format": {"type": "audio/pcm", "rate": _OUTPUT_RATE},
+            "turn_detection": None,
+        }
+        if self.settings.transcription_model:
+            input_audio["transcription"] = {
+                "model": self.settings.transcription_model
+            }
         session: dict[str, Any] = {
             "type": "realtime",
             "model": self.settings.model,
             "output_modalities": ["audio"],
             "instructions": self._instructions(),
             "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": _OUTPUT_RATE},
-                    "turn_detection": None,
-                    "transcription": {"model": self.settings.transcription_model},
-                },
+                "input": input_audio,
                 "output": {
                     "format": {"type": "audio/pcm", "rate": _OUTPUT_RATE},
                     "voice": self.settings.voice,

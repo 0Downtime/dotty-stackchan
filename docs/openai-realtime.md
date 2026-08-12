@@ -53,6 +53,11 @@ DOTTY_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
 DOTTY_REALTIME_REASONING_EFFORT=low
 ```
 
+Input transcription is optional and is separate from the model's ability to
+understand microphone audio. Set `DOTTY_REALTIME_TRANSCRIPTION_MODEL=` to omit
+the transcript stream when that model is unavailable or has a lower rate
+limit; speech-to-speech conversation continues normally.
+
 Then rebuild/recreate the Xiaozhi service so the new bind mount and environment
 are applied:
 

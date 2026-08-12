@@ -182,6 +182,17 @@ class TestOpenAIRealtime(unittest.TestCase):
         proxied = _settings(base_url="wss://example.test/realtime?tenant=dotty")
         self.assertIn("?tenant=dotty&model=", proxied.websocket_url)
 
+    def test_transcription_can_be_disabled_without_disabling_voice(self):
+        conn = _Connection()
+        bridge = _MODULE.OpenAIRealtimeBridge(
+            conn,
+            _settings(transcription_model=""),
+            codec_factory=_Codec,
+        )
+        session = bridge._session_update()["session"]
+        self.assertNotIn("transcription", session["audio"]["input"])
+        self.assertEqual(session["output_modalities"], ["audio"])
+
     def test_kid_mode_fails_closed_to_original_route(self):
         async def run():
             conn = _Connection()
