@@ -104,6 +104,12 @@ class TestSandwichInjection(unittest.TestCase):
         self.assertLess(wrapped.index("VOICE TOOL ROUTING"), wrapped.index("HARD CONSTRAINTS"))
         self.assertIn("not to tool calls", wrapped)
 
+    def test_current_stackchan_identity_overrides_earlier_persona(self):
+        wrapped = _wrap_with_sandwich("What is your name?", False)
+        self.assertIn("Your name is StackChan", wrapped)
+        self.assertIn("Refer to yourself only as StackChan", wrapped)
+        self.assertIn("Do not call yourself Dotty", wrapped)
+
     def test_json_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": '{"content": "remember purple"}'}]
         self.assertEqual(_last_user_text(dialogue), "remember purple")

@@ -159,7 +159,7 @@ def _settings(**overrides):
         "api_key": "secret-test-key",
         "model": "gpt-realtime-2.1-mini",
         "voice": "marin",
-        "name": "Dotty",
+        "name": "StackChan",
         "transcription_model": "gpt-live-transcribe",
         "reasoning_effort": "low",
         "connect_timeout_seconds": 1,
@@ -249,7 +249,7 @@ class TestOpenAIRealtime(unittest.TestCase):
         self.assertNotIn("transcription", session["audio"]["input"])
         self.assertEqual(session["output_modalities"], ["audio"])
 
-    def test_realtime_name_overrides_base_persona_identity(self):
+    def test_stackchan_identity_overrides_base_persona_and_stale_setting(self):
         conn = _Connection()
         bridge = _MODULE.OpenAIRealtimeBridge(
             conn,
@@ -257,8 +257,20 @@ class TestOpenAIRealtime(unittest.TestCase):
             codec_factory=_Codec,
         )
         instructions = bridge._instructions()
-        self.assertIn("current conversational name is ESP", instructions)
-        self.assertIn("If asked your name, answer ESP", instructions)
+        self.assertIn("current conversational name is StackChan", instructions)
+        self.assertIn("If asked your name, answer StackChan", instructions)
+        self.assertNotIn("current conversational name is ESP", instructions)
+
+    def test_realtime_default_name_is_stackchan(self):
+        conn = _Connection()
+        bridge = _MODULE.OpenAIRealtimeBridge(
+            conn,
+            _settings(),
+            codec_factory=_Codec,
+        )
+        instructions = bridge._instructions()
+        self.assertIn("current conversational name is StackChan", instructions)
+        self.assertIn("If asked your name, answer StackChan", instructions)
 
     def test_kid_mode_fails_closed_to_original_route(self):
         async def run():

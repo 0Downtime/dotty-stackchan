@@ -102,7 +102,7 @@ class RealtimeSettings:
     api_key: str = field(default="", repr=False)
     model: str = "gpt-realtime-2.1-mini"
     voice: str = "marin"
-    name: str = "Dotty"
+    name: str = "StackChan"
     transcription_model: str = "gpt-live-transcribe"
     reasoning_effort: str = "low"
     base_url: str = "wss://api.openai.com/v1/realtime"
@@ -122,7 +122,10 @@ class RealtimeSettings:
                 "DOTTY_REALTIME_MODEL", "gpt-realtime-2.1-mini"
             ).strip(),
             voice=os.environ.get("DOTTY_REALTIME_VOICE", "marin").strip(),
-            name=(os.environ.get("DOTTY_REALTIME_NAME", "Dotty").strip() or "Dotty"),
+            name=(
+                os.environ.get("DOTTY_REALTIME_NAME", "StackChan").strip()
+                or "StackChan"
+            ),
             transcription_model=os.environ.get(
                 "DOTTY_REALTIME_TRANSCRIPTION_MODEL", "gpt-live-transcribe"
             ).strip(),
@@ -298,7 +301,10 @@ class OpenAIRealtimeBridge:
 
     def _instructions(self) -> str:
         base = str((getattr(self.conn, "config", {}) or {}).get("prompt", "")).strip()
-        name = self.settings.name
+        # Interim identity policy: all voice routes call the robot StackChan.
+        # Keep the setting field for config compatibility, but do not allow a
+        # stale DOTTY_REALTIME_NAME value to diverge from the local route.
+        name = "StackChan"
         realtime_rules = (
             f"You are speaking directly through a small desktop robot. Your current "
             f"conversational name is {name}. If the base persona uses a different name, "

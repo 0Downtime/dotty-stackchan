@@ -27,7 +27,7 @@ log = logging.getLogger("dotty-behaviour.consumers.sleep_dreamer")
 
 
 DREAM_SYSTEM_PROMPT = (
-    "You are Dotty, a small family robot, asleep. You are dreaming. "
+    "You are StackChan, a small family robot, asleep. You are dreaming. "
     "Write rich, multi-paragraph robot dreams in first person, present "
     "tense — perception is strange, time bends, identity is fluid. "
     "Draw on the seed's atmosphere without retelling it. End with a "
@@ -37,7 +37,7 @@ DREAM_SYSTEM_PROMPT = (
 DREAM_USER_PROMPT_TEMPLATE = (
     "Tonight's seed: {seed}\n"
     "\n"
-    "Write a dream of 4–7 paragraphs as Dotty would dream it.\n"
+    "Write a dream of 4–7 paragraphs as StackChan would dream it.\n"
 )
 
 
