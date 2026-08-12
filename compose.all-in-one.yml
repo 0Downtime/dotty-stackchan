@@ -85,12 +85,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
       - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
+      - DOTTY_REALTIME_NAME=${DOTTY_REALTIME_NAME:-Dotty}
       - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
       - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
       - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
       - DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS=${DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS:-8}
-      - DOTTY_REALTIME_WEB_SEARCH_ENABLED=${DOTTY_REALTIME_WEB_SEARCH_ENABLED:-false}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - DOTTY_REALTIME_CODEX_WEB_ENABLED=${DOTTY_REALTIME_CODEX_WEB_ENABLED:-false}
+      - DOTTY_CODEX_BROKER_URL=${DOTTY_CODEX_BROKER_URL:-http://codex-web-broker:8092/search}
+      - DOTTY_CODEX_BROKER_TOKEN=${DOTTY_CODEX_BROKER_TOKEN:-}
+      - DOTTY_CODEX_TIMEOUT_SECONDS=${DOTTY_CODEX_TIMEOUT_SECONDS:-60}
     ports:
       # 8000: WebSocket — StackChan connects here
       - "8000:8000"
@@ -142,3 +145,32 @@ services:
       # owns writes). Host path MUST match the bridge container's state mount.
       # Override DOTTY_STATE_DIR if your bridge writes elsewhere.
       - ${DOTTY_STATE_DIR:-/mnt/user/appdata/dotty-bridge/state}:/var/lib/dotty-bridge/state:ro
+
+  # Optional private Internet-research handoff. Start with
+  # `docker compose --profile codex-web up -d codex-web-broker`, authenticate
+  # its named volume once, then enable DOTTY_REALTIME_CODEX_WEB_ENABLED.
+  codex-web-broker:
+    profiles: ["codex-web"]
+    build:
+      context: ./codex-web-broker
+    image: dotty-codex-web-broker:local
+    container_name: dotty-codex-web-broker
+    restart: unless-stopped
+    environment:
+      - DOTTY_CODEX_BROKER_TOKEN=${DOTTY_CODEX_BROKER_TOKEN:-}
+      - DOTTY_CODEX_TIMEOUT_MS=${DOTTY_CODEX_TIMEOUT_MS:-60000}
+    expose:
+      - "8092"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+      - /workspace:rw,noexec,nosuid,nodev,size=4m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - codex-web-auth:/home/node/.codex
+
+volumes:
+  codex-web-auth:

@@ -70,11 +70,15 @@ class _Connection:
         self.client_is_speaking = False
         self.client_listen_mode = "auto"
         self.need_bind = False
+        self.close_after_chat = False
+        self.last_activity_time = 12345.0
+        self.sentence_id = "old-local-sentence"
         self.bind_completed_event = asyncio.Event()
         self.bind_completed_event.set()
         self.original_messages = []
         self.reset_count = 0
         self.clear_count = 0
+        self.queue_clear_count = 0
 
     async def _route_message(self, message):
         self.original_messages.append(message)
@@ -85,6 +89,9 @@ class _Connection:
     def clearSpeakStatus(self):
         self.client_is_speaking = False
         self.clear_count += 1
+
+    def clear_queues(self):
+        self.queue_clear_count += 1
 
 
 class _Codec:
@@ -151,6 +158,7 @@ def _settings(**overrides):
         "api_key": "secret-test-key",
         "model": "gpt-realtime-2.1-mini",
         "voice": "marin",
+        "name": "Dotty",
         "transcription_model": "gpt-live-transcribe",
         "reasoning_effort": "low",
         "connect_timeout_seconds": 1,
@@ -176,38 +184,36 @@ class TestOpenAIRealtime(unittest.TestCase):
         self.env.stop()
 
     def test_settings_do_not_reveal_api_key(self):
-        settings = _settings(tavily_api_key="tavily-secret-test-key")
+        settings = _settings(codex_broker_token="codex-broker-secret")
         self.assertNotIn("secret-test-key", repr(settings))
-        self.assertNotIn("tavily-secret-test-key", repr(settings))
+        self.assertNotIn("codex-broker-secret", repr(settings))
         self.assertIn("gpt-realtime-2.1-mini", settings.websocket_url)
         proxied = _settings(base_url="wss://example.test/realtime?tenant=dotty")
         self.assertIn("?tenant=dotty&model=", proxied.websocket_url)
 
-    def test_web_search_uses_narrow_read_only_remote_mcp_tool(self):
+    def test_web_search_uses_narrow_codex_function_tool(self):
         conn = _Connection()
         bridge = _MODULE.OpenAIRealtimeBridge(
             conn,
             _settings(
-                web_search_enabled=True,
-                tavily_api_key="tavily-secret-test-key",
+                codex_web_enabled=True,
+                codex_broker_token="codex-broker-secret",
             ),
             codec_factory=_Codec,
         )
         tools = bridge._session_update()["session"]["tools"]
         self.assertEqual(len(tools), 2)
         web = tools[1]
-        self.assertEqual(web["type"], "mcp")
-        self.assertEqual(web["server_label"], "tavily_web")
-        self.assertEqual(web["server_url"], "https://mcp.tavily.com/mcp/")
-        self.assertEqual(web["authorization"], "Bearer tavily-secret-test-key")
-        self.assertEqual(web["allowed_tools"], ["tavily_search"])
-        self.assertEqual(web["require_approval"], "never")
+        self.assertEqual(web["type"], "function")
+        self.assertEqual(web["name"], "consult_codex_web")
+        self.assertEqual(web["parameters"]["required"], ["query"])
+        self.assertFalse(web["parameters"]["additionalProperties"])
 
     def test_web_search_stays_disabled_without_both_opt_in_and_key(self):
         conn = _Connection()
         for settings in (
-            _settings(web_search_enabled=False, tavily_api_key="present"),
-            _settings(web_search_enabled=True, tavily_api_key=""),
+            _settings(codex_web_enabled=False, codex_broker_token="present"),
+            _settings(codex_web_enabled=True, codex_broker_token=""),
         ):
             bridge = _MODULE.OpenAIRealtimeBridge(
                 conn,
@@ -229,6 +235,17 @@ class TestOpenAIRealtime(unittest.TestCase):
         session = bridge._session_update()["session"]
         self.assertNotIn("transcription", session["audio"]["input"])
         self.assertEqual(session["output_modalities"], ["audio"])
+
+    def test_realtime_name_overrides_base_persona_identity(self):
+        conn = _Connection()
+        bridge = _MODULE.OpenAIRealtimeBridge(
+            conn,
+            _settings(name="ESP"),
+            codec_factory=_Codec,
+        )
+        instructions = bridge._instructions()
+        self.assertIn("current conversational name is ESP", instructions)
+        self.assertIn("If asked your name, answer ESP", instructions)
 
     def test_kid_mode_fails_closed_to_original_route(self):
         async def run():
@@ -305,9 +322,13 @@ class TestOpenAIRealtime(unittest.TestCase):
                 connect_factory=connect,
                 codec_factory=lambda: codec,
             )
+            self.assertEqual(conn.last_activity_time, 0.0)
+            conn.close_after_chat = True
+            conn.client_is_speaking = True
             await conn._route_message(json.dumps({"type": "listen", "state": "start"}))
             await conn._route_message(b"opus16")
             await conn._route_message(json.dumps({"type": "listen", "state": "stop"}))
+            await conn._route_message(b"idle-opus")
 
             event_types = [event["type"] for event in upstream.sent]
             self.assertEqual(event_types[:2], ["session.update", "input_audio_buffer.clear"])
@@ -317,6 +338,10 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertEqual(append["audio"], "cGNtMjQ=")
             self.assertEqual(codec.decoded, [b"opus16"])
             self.assertEqual(conn.original_messages, [])
+            self.assertTrue(conn.client_abort)
+            self.assertFalse(conn.close_after_chat)
+            self.assertIsNone(conn.sentence_id)
+            self.assertEqual(conn.queue_clear_count, 1)
             self.assertEqual(conn.client_listen_mode, "manual")
             self.assertNotIn("device-private-id", captured["headers"]["OpenAI-Safety-Identifier"])
             self.assertEqual(len(captured["headers"]["OpenAI-Safety-Identifier"]), 64)
@@ -327,6 +352,7 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertEqual(session["tools"][0]["name"], "consult_dotty_local_agent")
             self.assertIn("do not speak or output an emoji", session["instructions"])
             await bridge.close()
+            self.assertFalse(conn.client_abort)
 
         asyncio.run(run())
 
@@ -521,6 +547,64 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertEqual(decoded["result"], "😐 local result")
             self.assertEqual(upstream.sent[-1], {"type": "response.create"})
             self.assertEqual(conn.llm.calls[0][0], "session-1")
+            await bridge.close()
+
+        asyncio.run(run())
+
+    def test_codex_web_call_round_trips_through_private_broker_client(self):
+        async def run():
+            conn = _Connection()
+            upstream = _RealtimeWebSocket()
+            queries = []
+
+            async def connect(_url, _headers):
+                return upstream
+
+            async def codex_web_client(query):
+                queries.append(query)
+                return "Current result. Sources: Example https://example.test"
+
+            bridge = _MODULE.OpenAIRealtimeBridge(
+                conn,
+                _settings(
+                    codex_web_enabled=True,
+                    codex_broker_token="codex-broker-secret",
+                ),
+                connect_factory=connect,
+                codec_factory=_Codec,
+                codex_web_client=codex_web_client,
+            )
+            self.assertTrue(await bridge.ensure_connected())
+            await bridge._handle_server_event(
+                {
+                    "type": "response.done",
+                    "response": {
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "consult_codex_web",
+                                "call_id": "call-web-1",
+                                "arguments": json.dumps(
+                                    {"query": "What changed today?"}
+                                ),
+                            }
+                        ]
+                    },
+                }
+            )
+            tool_output = next(
+                event
+                for event in upstream.sent
+                if event["type"] == "conversation.item.create"
+            )
+            decoded = json.loads(tool_output["item"]["output"])
+            self.assertIn("Current result", decoded["result"])
+            self.assertEqual(queries, ["What changed today?"])
+            self.assertEqual(upstream.sent[-1], {"type": "response.create"})
+            self.assertIn(
+                ("info", "Realtime Codex web research completed"),
+                conn.logger.records,
+            )
             await bridge.close()
 
         asyncio.run(run())

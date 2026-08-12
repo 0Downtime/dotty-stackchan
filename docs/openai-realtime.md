@@ -49,22 +49,38 @@ OPENAI_API_KEY=your-deployment-secret
 # Optional tuning
 DOTTY_REALTIME_MODEL=gpt-realtime-2.1-mini
 DOTTY_REALTIME_VOICE=marin
+# Optional conversational identity; useful when matching a temporary wake phrase.
+DOTTY_REALTIME_NAME=Dotty
 DOTTY_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
 DOTTY_REALTIME_REASONING_EFFORT=low
 ```
 
-Optional read-only Internet search uses Tavily's official remote MCP server:
+Optional Internet research can hand off to a private Codex broker authenticated
+with a ChatGPT/Codex subscription:
 
 ```dotenv
-DOTTY_REALTIME_WEB_SEARCH_ENABLED=true
-TAVILY_API_KEY=your-tavily-deployment-secret
+DOTTY_REALTIME_CODEX_WEB_ENABLED=true
+DOTTY_CODEX_BROKER_URL=http://codex-web-broker:8092/search
+DOTTY_CODEX_BROKER_TOKEN=generate-a-separate-random-secret
+DOTTY_CODEX_TIMEOUT_SECONDS=60
 ```
 
-Only `tavily_search` is imported into the Realtime session. OpenAI calls the
-remote MCP server directly, so no home-lab listener or public tunnel is needed.
-The MCP server receives tool arguments selected by the model, not the complete
-Realtime conversation. Keep the key in the deployment secret file; never put
-it in Compose YAML or commit it.
+Build the optional sidecar and authenticate its private named volume once:
+
+```bash
+docker compose --profile codex-web build codex-web-broker
+docker compose --profile codex-web run --rm --entrypoint codex \
+  codex-web-broker login --device-auth
+docker compose --profile codex-web up -d codex-web-broker
+```
+
+Realtime sees only the `consult_codex_web` function. The bridge sends its
+self-contained `query` to the broker over the private Compose network; the
+broker runs an ephemeral `codex exec` search and returns the final answer. It
+has no published host port, host mounts, source checkout, or Docker socket.
+Codex authentication stays in a dedicated named volume that is never mounted
+into Xiaozhi. Keep the broker token in the deployment secret file and treat the
+auth volume like a password.
 
 Input transcription is optional and is separate from the model's ability to
 understand microphone audio. Set `DOTTY_REALTIME_TRANSCRIPTION_MODEL=` to omit
@@ -148,8 +164,8 @@ After deployment, validate behavior rather than configuration text alone:
    retains sensible conversation context.
 5. Ask for current device status or a remembered fact and confirm the local
    agent tool runs before the spoken answer.
-6. With web search enabled, ask for a current fact and confirm logs show
-   `OpenAI Realtime web-search MCP tools ready` before the spoken answer.
+6. With Codex web research enabled, ask for a current fact and confirm logs show
+   `Realtime Codex web research completed` before the spoken answer.
 7. Turn Kid Mode on during a response and confirm audio stops, followed by a
    successful local-path turn.
 8. Temporarily remove or invalidate the deployment key, recreate the service,

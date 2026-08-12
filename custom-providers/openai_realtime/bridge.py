@@ -72,13 +72,16 @@ class RealtimeSettings:
     api_key: str = field(default="", repr=False)
     model: str = "gpt-realtime-2.1-mini"
     voice: str = "marin"
+    name: str = "Dotty"
     transcription_model: str = "gpt-live-transcribe"
     reasoning_effort: str = "low"
     base_url: str = "wss://api.openai.com/v1/realtime"
     connect_timeout_seconds: float = 10.0
     event_timeout_seconds: float = 8.0
-    web_search_enabled: bool = False
-    tavily_api_key: str = field(default="", repr=False)
+    codex_web_enabled: bool = False
+    codex_broker_url: str = "http://codex-web-broker:8092/search"
+    codex_broker_token: str = field(default="", repr=False)
+    codex_timeout_seconds: float = 60.0
 
     @classmethod
     def from_env(cls) -> "RealtimeSettings":
@@ -89,6 +92,7 @@ class RealtimeSettings:
                 "DOTTY_REALTIME_MODEL", "gpt-realtime-2.1-mini"
             ).strip(),
             voice=os.environ.get("DOTTY_REALTIME_VOICE", "marin").strip(),
+            name=(os.environ.get("DOTTY_REALTIME_NAME", "Dotty").strip() or "Dotty"),
             transcription_model=os.environ.get(
                 "DOTTY_REALTIME_TRANSCRIPTION_MODEL", "gpt-live-transcribe"
             ).strip(),
@@ -104,10 +108,19 @@ class RealtimeSettings:
             event_timeout_seconds=_env_float(
                 "DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS", 8.0, 1.0
             ),
-            web_search_enabled=_env_bool(
-                "DOTTY_REALTIME_WEB_SEARCH_ENABLED", False
+            codex_web_enabled=_env_bool(
+                "DOTTY_REALTIME_CODEX_WEB_ENABLED", False
             ),
-            tavily_api_key=os.environ.get("TAVILY_API_KEY", "").strip(),
+            codex_broker_url=os.environ.get(
+                "DOTTY_CODEX_BROKER_URL",
+                "http://codex-web-broker:8092/search",
+            ).strip(),
+            codex_broker_token=os.environ.get(
+                "DOTTY_CODEX_BROKER_TOKEN", ""
+            ).strip(),
+            codex_timeout_seconds=_env_float(
+                "DOTTY_CODEX_TIMEOUT_SECONDS", 60.0, 5.0
+            ),
         )
 
     @property
@@ -172,6 +185,7 @@ class OpusPcmCodec:
 
 ConnectFactory = Callable[[str, dict[str, str]], Awaitable[Any]]
 CodecFactory = Callable[[], Any]
+CodexWebClient = Callable[[str], Awaitable[str]]
 
 
 async def _default_connect(url: str, headers: dict[str, str]):
@@ -190,11 +204,13 @@ class OpenAIRealtimeBridge:
         *,
         connect_factory: ConnectFactory | None = None,
         codec_factory: CodecFactory | None = None,
+        codex_web_client: CodexWebClient | None = None,
     ) -> None:
         self.conn = conn
         self.settings = settings or RealtimeSettings.from_env()
         self._connect_factory = connect_factory or _default_connect
         self._codec_factory = codec_factory or OpusPcmCodec
+        self._codex_web_client = codex_web_client or self._request_codex_web
         self._ws: Any | None = None
         self._codec: Any | None = None
         self._receiver_task: asyncio.Task | None = None
@@ -216,6 +232,7 @@ class OpenAIRealtimeBridge:
         self._transcript = ""
         self._warned_missing_key = False
         self._session_listen_mode: str | None = None
+        self._owns_voice_route = False
 
     @property
     def connected(self) -> bool:
@@ -250,16 +267,19 @@ class OpenAIRealtimeBridge:
 
     def _instructions(self) -> str:
         base = str((getattr(self.conn, "config", {}) or {}).get("prompt", "")).strip()
+        name = self.settings.name
         realtime_rules = (
-            "You are speaking directly through Dotty, a small desktop robot. "
+            f"You are speaking directly through a small desktop robot. Your current "
+            f"conversational name is {name}. If the base persona uses a different name, "
+            f"this current-name instruction overrides it. If asked your name, answer {name}. "
             "Ignore any earlier instruction requiring an emoji prefix: do not "
             "speak or output an emoji. "
             "Reply in natural spoken English without markdown, lists, emoji names, "
             "or stage directions. Keep ordinary replies to one or two short sentences. "
             "Do not claim a local action, memory lookup, camera result, device status, "
             "or song succeeded unless you used the consult_dotty_local_agent tool. "
-            "For current events or facts that may have changed, use the Tavily web "
-            "search tool when it is available and briefly name the sources you relied on."
+            "For current events or facts that may have changed, use the Codex web "
+            "research tool when it is available and briefly name the sources it returned."
         )
         return f"{base}\n\n{realtime_rules}" if base else realtime_rules
 
@@ -289,18 +309,34 @@ class OpenAIRealtimeBridge:
                     },
                 }
             )
-        if self.settings.web_search_enabled and self.settings.tavily_api_key:
+        if (
+            self.settings.codex_web_enabled
+            and self.settings.codex_broker_url
+            and self.settings.codex_broker_token
+        ):
             tools.append(
                 {
-                    "type": "mcp",
-                    "server_label": "tavily_web",
-                    "server_description": (
-                        "Read-only Internet search for current facts and news."
+                    "type": "function",
+                    "name": "consult_codex_web",
+                    "description": (
+                        "Ask a private read-only Codex research agent to search the live "
+                        "Internet. Use this for news, current facts, changing information, "
+                        "or when the user explicitly asks you to look something up."
                     ),
-                    "server_url": "https://mcp.tavily.com/mcp/",
-                    "authorization": f"Bearer {self.settings.tavily_api_key}",
-                    "allowed_tools": ["tavily_search"],
-                    "require_approval": "never",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": (
+                                    "A self-contained Internet research question with "
+                                    "the relevant names, place, and timeframe."
+                                ),
+                            }
+                        },
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
                 }
             )
         return tools
@@ -423,9 +459,9 @@ class OpenAIRealtimeBridge:
             return False
         if self._response_active or self._tts_started:
             await self.interrupt()
+        await self._claim_voice_route()
         self._active_input = True
         self._input_packets = 0
-        self.conn.client_abort = False
         if callable(getattr(self.conn, "reset_audio_states", None)):
             self.conn.reset_audio_states()
         try:
@@ -553,6 +589,12 @@ class OpenAIRealtimeBridge:
                 await self._disconnect(send_device_stop=True)
             return False
         if isinstance(message, bytes):
+            # Once Realtime owns this connection, consume idle microphone
+            # frames too. Letting them fall through to Xiaozhi's local VAD
+            # advances its inactivity timer and can start the local Piper
+            # farewell while the next Realtime turn is connecting.
+            if self._owns_voice_route and not self._active_input:
+                return True
             return await self.push_opus(message)
         try:
             payload = json.loads(message)
@@ -604,15 +646,6 @@ class OpenAIRealtimeBridge:
             return
         if event_type == "session.updated":
             self._updated_event.set()
-            return
-        if event_type == "mcp_list_tools.completed":
-            self._log("info", "OpenAI Realtime web-search MCP tools ready")
-            return
-        if event_type == "mcp_list_tools.failed":
-            self._log("error", "OpenAI Realtime web-search MCP tool import failed")
-            return
-        if event_type == "response.mcp_call.failed":
-            self._log("error", "OpenAI Realtime web-search MCP call failed")
             return
         if event_type == "conversation.item.input_audio_transcription.completed":
             transcript = str(event.get("transcript", "")).strip()
@@ -731,12 +764,36 @@ class OpenAIRealtimeBridge:
         await self._send_openai({"type": "response.create"})
 
     async def _execute_tool(self, call: dict[str, Any]) -> str:
-        if call.get("name") != "consult_dotty_local_agent":
-            return json.dumps({"error": "unknown tool"})
         try:
             arguments = json.loads(call.get("arguments") or "{}")
         except json.JSONDecodeError:
             return json.dumps({"error": "invalid arguments"})
+
+        if call.get("name") == "consult_codex_web":
+            query = str(arguments.get("query", "")).strip()
+            if (
+                not query
+                or not self.settings.codex_web_enabled
+                or not self.settings.codex_broker_token
+            ):
+                return json.dumps({"error": "Codex web research unavailable"})
+            self._log("info", "Realtime Codex web research started")
+            try:
+                result = await self._codex_web_client(query)
+            except Exception as exc:
+                self._log(
+                    "error",
+                    f"Realtime Codex web research failed ({type(exc).__name__})",
+                )
+                return json.dumps({"error": "Codex web research failed"})
+            self._log("info", "Realtime Codex web research completed")
+            return json.dumps(
+                {"result": str(result)[:8000] or "No reliable web result was found."},
+                ensure_ascii=False,
+            )
+
+        if call.get("name") != "consult_dotty_local_agent":
+            return json.dumps({"error": "unknown tool"})
         request = str(arguments.get("request", "")).strip()
         llm = getattr(self.conn, "llm", None)
         if not request or not callable(getattr(llm, "response", None)):
@@ -753,6 +810,34 @@ class OpenAIRealtimeBridge:
             self._log("error", f"Realtime local-agent tool failed ({type(exc).__name__})")
             return json.dumps({"error": "local agent failed"})
         return json.dumps({"result": result[:4000] or "No result"}, ensure_ascii=False)
+
+    async def _request_codex_web(self, query: str) -> str:
+        def request_broker() -> str:
+            import urllib.request
+
+            payload = json.dumps({"query": query}).encode("utf-8")
+            request = urllib.request.Request(
+                self.settings.codex_broker_url,
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {self.settings.codex_broker_token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "dotty-stackchan-realtime/0.1",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(
+                request,
+                timeout=self.settings.codex_timeout_seconds,
+            ) as response:
+                body = response.read(16_384)
+            decoded = json.loads(body.decode("utf-8"))
+            result = decoded.get("result") if isinstance(decoded, dict) else None
+            if not isinstance(result, str) or not result.strip():
+                raise ValueError("Codex broker returned no result")
+            return result.strip()
+
+        return await asyncio.to_thread(request_broker)
 
     async def _send_device_json(self, payload: dict[str, Any]) -> None:
         payload.setdefault("session_id", getattr(self.conn, "session_id", ""))
@@ -777,6 +862,39 @@ class OpenAIRealtimeBridge:
         clear_status = getattr(self.conn, "clearSpeakStatus", None)
         if callable(clear_status):
             clear_status()
+
+    async def _claim_voice_route(self) -> None:
+        """Quiesce Xiaozhi's local LLM/TTS before Realtime playback."""
+        if self._owns_voice_route:
+            return
+        self._owns_voice_route = True
+        self.conn.close_after_chat = False
+        self.conn.client_abort = True
+        # Invalidate audio already synthesized by a predecessor local turn.
+        # The Xiaozhi TTS consumer drops packets whose sentence id no longer
+        # matches the connection's current id.
+        if hasattr(self.conn, "sentence_id"):
+            self.conn.sentence_id = None
+        clear_queues = getattr(self.conn, "clear_queues", None)
+        if callable(clear_queues):
+            clear_queues()
+        try:
+            await self._send_device_json({"type": "tts", "state": "stop"})
+        except Exception:
+            pass
+        clear_status = getattr(self.conn, "clearSpeakStatus", None)
+        if callable(clear_status):
+            clear_status()
+        else:
+            self.conn.client_is_speaking = False
+        self._log("info", "OpenAI Realtime claimed voice route; local speech quiesced")
+
+    def _release_voice_route(self) -> None:
+        if not self._owns_voice_route:
+            return
+        self._owns_voice_route = False
+        self.conn.client_abort = False
+        self.conn.close_after_chat = False
 
     def _drain_output_queue(self) -> None:
         while True:
@@ -813,6 +931,7 @@ class OpenAIRealtimeBridge:
         self._active_input = False
         self._response_active = False
         self._drain_output_queue()
+        self._release_voice_route()
 
     async def close(self) -> None:
         self._closed = True
@@ -829,6 +948,12 @@ def attach_realtime_bridge(
     if not selected.enabled:
         return None
     bridge = OpenAIRealtimeBridge(conn, selected, **bridge_kwargs)
+    # Realtime owns inactivity once activated. Start with Xiaozhi's local
+    # no-voice timer disarmed so an old local farewell cannot race the first
+    # OpenAI connection handshake. Local fallback re-arms it on real speech.
+    if hasattr(conn, "last_activity_time"):
+        conn.last_activity_time = 0.0
+    conn.close_after_chat = False
     original_route = conn._route_message
 
     async def route_with_realtime(message: str | bytes):
