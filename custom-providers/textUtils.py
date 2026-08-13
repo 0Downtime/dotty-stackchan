@@ -13,9 +13,22 @@ TAG = __name__
 #   - custom-providers/pi_voice/ (the live voice path)
 #   - custom-providers/openai_compat/openai_compat.py (via core.utils.textUtils
 #     bind-mount in xiaozhi container)
-# bridge/dashboard.py keeps its own _ALLOWED_EMOJIS copy intentionally — it's
-# the admin-UI safety check, decoupled from the LLM enforcement path.
-ALLOWED_EMOJIS = ("😊", "😆", "😢", "😮", "🤔", "😠", "😐", "😍", "😴")
+# Ordered, canonical StackChan face protocol. Legacy emoji aliases remain in
+# EMOJI_MAP below, but prompts and the admin API advertise these 21 choices.
+FACE_CATALOG = (
+    ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"),
+    ("😂", "funny"), ("😔", "sad"), ("😠", "angry"),
+    ("😭", "crying"), ("😍", "loving"), ("😳", "embarrassed"),
+    ("😲", "surprised"), ("😱", "shocked"), ("🤔", "thinking"),
+    ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+    ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+    ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+)
+FACE_IDS = tuple(face_id for _, face_id in FACE_CATALOG)
+FACE_EMOJI_BY_ID = {face_id: emoji for emoji, face_id in FACE_CATALOG}
+CANONICAL_EMOJIS = tuple(emoji for emoji, _ in FACE_CATALOG)
+LEGACY_EMOJI_ALIASES = ("😊", "😢", "😮", "😐")
+ALLOWED_EMOJIS = CANONICAL_EMOJIS + LEGACY_EMOJI_ALIASES
 FALLBACK_EMOJI = "😐"
 
 # Sentence boundary regex used by truncation logic.
@@ -32,7 +45,7 @@ _BASE_SUFFIX = (
     "1. Reply in ENGLISH ONLY. Even if the user message is unclear, in another language, "
     "or you'd naturally pick Chinese — your reply is English. No Chinese, no Japanese, no Korean.\n"
     "2. Your reply contains EXACTLY ONE emoji from this set as the first character — "
-    "and NO OTHER EMOJIS anywhere in the reply: 😊 😆 😢 😮 🤔 😠 😐 😍 😴\n"
+    "and NO OTHER EMOJIS anywhere in the reply: " + " ".join(ALLOWED_EMOJIS) + "\n"
     "3. Length: default 1-2 short TTS-friendly sentences. For open-ended asks "
     "(a story, an explanation, a 'why' or 'how', or a request for several things) "
     "match the natural length of what was asked, up to 6 sentences. "
@@ -146,7 +159,7 @@ def filter_tts_stream(chunks, kid_mode, on_hit=None):
 
     yield from buffered
 
-# Enforced subset (bridge.py ALLOWED_EMOJIS): 😊 😆 😢 😮 🤔 😠 😐 😍 😴
+# Four older model outputs are accepted as aliases for compatibility.
 EMOJI_MAP = {
     "😂": "funny",
     "😭": "crying",

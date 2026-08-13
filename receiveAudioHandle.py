@@ -1091,6 +1091,14 @@ async def startToChat(conn: "ConnectionHandler", text):
             await _cancel_active_dance(conn, dance_task)
         await handleAbortMessage(conn)
 
+    # ``handleAbortMessage`` marks the predecessor turn aborted so its LLM/TTS
+    # work stops and clears the old queues.  The utterance being processed here
+    # is the successor, however: leaving that flag set makes Connection.chat()
+    # consume the new model response and immediately discard it before TTS.
+    # Reset only after predecessor cleanup has completed and before dispatching
+    # this accepted utterance to intent/chat.
+    conn.client_abort = False
+
     intent_handled = await handle_user_intent(conn, actual_text)
 
     if intent_handled:

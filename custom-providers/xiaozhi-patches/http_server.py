@@ -1,4 +1,5 @@
 import asyncio
+import json as _json_mod
 from aiohttp import ClientSession, ClientTimeout, web
 from config.logger import setup_logging
 from core.api.ota_handler import OTAHandler
@@ -11,6 +12,17 @@ from core.portal_bridge import active_connections as _dotty_active_connections
 # envelope + per-conn serialized sends live in one module shared with
 # receiveAudioHandle.py (mounted at core/utils/device_command.py).
 from core.utils import device_command as _dotty_device_command
+try:
+    from core.utils.textUtils import FACE_EMOJI_BY_ID
+except ImportError:  # standalone source/unit-test loading outside container
+    FACE_EMOJI_BY_ID = dict((face_id, emoji) for emoji, face_id in (
+        ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"), ("😂", "funny"),
+        ("😔", "sad"), ("😠", "angry"), ("😭", "crying"), ("😍", "loving"),
+        ("😳", "embarrassed"), ("😲", "surprised"), ("😱", "shocked"),
+        ("🤔", "thinking"), ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+        ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+        ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+    ))
 
 TAG = __name__
 
@@ -191,6 +203,86 @@ class SimpleHttpServer:
     async def _dotty_list_devices(self, request: "web.Request") -> "web.Response":
         """GET /xiaozhi/admin/devices — list connected device-ids."""
         return web.json_response({"devices": list(_dotty_active_connections)})
+
+    async def _dotty_set_emotion(self, request: "web.Request") -> "web.Response":
+        """Send one validated canonical face frame directly to the device."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": "JSON object required"}, status=400)
+        emotion = (data.get("emotion") or "").strip()
+        device_id = (data.get("device_id") or "").strip()
+        emoji = FACE_EMOJI_BY_ID.get(emotion)
+        if emoji is None:
+            return web.json_response(
+                {"error": "unknown emotion", "allowed": list(FACE_EMOJI_BY_ID)},
+                status=400,
+            )
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        frame = {
+            "type": "llm",
+            "text": emoji,
+            "emotion": emotion,
+            "session_id": getattr(conn, "session_id", ""),
+        }
+        await _dotty_device_command.send_serialized(conn, __import__("json").dumps(frame))
+        return web.json_response({
+            "ok": True,
+            "device_id": _dotty_conn_device_id(conn, device_id),
+            "emotion": emotion,
+            "emoji": emoji,
+        })
+
+    async def _dotty_device_status(self, request: "web.Request") -> "web.Response":
+        """POST /xiaozhi/admin/device-status
+
+        Narrow read-only bridge to the firmware's ``self.get_device_status``
+        MCP tool. Unlike the older fire-and-forget admin commands, this waits
+        for the correlated MCP reply so Pi can ground its spoken answer.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        device_id = (data.get("device_id") or "").strip() if isinstance(data, dict) else ""
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        mcp_client = getattr(conn, "mcp_client", None)
+        if mcp_client is None:
+            return web.json_response({"error": "device MCP unavailable"}, status=503)
+
+        tool_name = next(
+            (
+                sanitized
+                for sanitized, original in mcp_client.name_mapping.items()
+                if original == "self.get_device_status"
+            ),
+            "",
+        )
+        if not tool_name:
+            return web.json_response({"error": "device status tool unavailable"}, status=503)
+
+        try:
+            from core.providers.tools.device_mcp.mcp_handler import call_mcp_tool
+
+            raw = await call_mcp_tool(conn, mcp_client, tool_name, {}, timeout=5)
+            try:
+                status = _json_mod.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, _json_mod.JSONDecodeError):
+                status = raw
+            return web.json_response({
+                "ok": True,
+                "device_id": _dotty_conn_device_id(conn, device_id),
+                "status": status,
+            })
+        except Exception as exc:
+            self.logger.bind(tag=TAG).warning(f"device-status failed: {exc}")
+            return web.json_response({"error": "device status unavailable"}, status=502)
 
     async def _dotty_abort(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/abort  Body: {"device_id": "<optional>"}
@@ -688,6 +780,9 @@ class SimpleHttpServer:
                             "/xiaozhi/admin/devices", self._dotty_list_devices
                         ),
                         web.post(
+                            "/xiaozhi/admin/device-status", self._dotty_device_status
+                        ),
+                        web.post(
                             "/xiaozhi/admin/abort", self._dotty_abort
                         ),
                         web.post(
@@ -721,6 +816,10 @@ class SimpleHttpServer:
                         web.post(
                             "/xiaozhi/admin/say",
                             self._dotty_say,
+                        ),
+                        web.post(
+                            "/xiaozhi/admin/set-emotion",
+                            self._dotty_set_emotion,
                         ),
                     ]
                 )

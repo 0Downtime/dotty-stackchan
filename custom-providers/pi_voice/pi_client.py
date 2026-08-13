@@ -54,6 +54,7 @@ def _default_pi_flags() -> tuple[str, ...]:
         "--mode", "rpc",
         "--provider", provider,
         "--model", model,
+        "--no-builtin-tools",
         "--no-session",
         "--no-context-files",
         "--offline",

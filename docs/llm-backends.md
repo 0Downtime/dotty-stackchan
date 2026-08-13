@@ -128,7 +128,7 @@ Docker host, and there's no reason to keep it once nothing uses it:
 ```
 
 The trade-off is the one in the comparison table above: `OpenAICompat` is
-stateless, so you lose persistent memory and all seven voice tools.
+stateless, so you lose persistent memory and all eight voice tools.
 
 ### Anthropic API directly (without OpenRouter)
 
@@ -210,7 +210,7 @@ LLM:
 
 The default in the shipped `.config.yaml`. The `PiVoiceLLM` provider routes each voice turn to the **dotty-pi container** — the pi coding agent running on the same Docker host as xiaozhi-server.
 
-`PiClient` drives the agent by running `docker exec -i dotty-pi pi --mode rpc … --no-context-files` and exchanging JSONL messages over its stdin/stdout. The agent's outer loop uses `qwen3.5:4b` on local llama-swap for fast chitchat and loads the **dotty-pi-ext extension**, which exposes seven voice-focused tools:
+`PiClient` drives the agent by running `docker exec -i dotty-pi pi --mode rpc … --no-builtin-tools --no-context-files` and exchanging JSONL messages over its stdin/stdout. The agent's outer loop uses `qwen3.5:4b` on local llama-swap for fast chitchat and loads the **dotty-pi-ext extension**, which exposes eight voice-focused tools:
 
 | Tool | Purpose |
 |---|---|
