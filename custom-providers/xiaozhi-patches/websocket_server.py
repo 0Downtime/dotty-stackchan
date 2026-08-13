@@ -152,12 +152,43 @@ class WebSocketServer:
         if _dotty_dev_id:
             _dotty_active_connections[_dotty_dev_id] = handler
         _dotty_handler_error = None
+        _dotty_face_sync_task = None
+        if _dotty_dev_id:
+            async def _sync_face_bundle_after_connect():
+                # handle_connection installs websocket/session_id. Wait for
+                # that seam, then reassert server desired state immediately.
+                for _ in range(100):
+                    if getattr(handler, "websocket", None) is not None:
+                        break
+                    await asyncio.sleep(0.05)
+                if getattr(handler, "websocket", None) is None:
+                    return
+                try:
+                    from core.utils.face_bundles import FaceBundleStore
+                    from core.utils.device_command import call_tool
+                    desired = FaceBundleStore().get(_dotty_dev_id)
+                    pack_id = desired.get("face_pack_id", "classic")
+                    handler._dotty_requested_face_pack = pack_id
+                    handler._dotty_face_pack_pending = True
+                    await call_tool(
+                        handler, "self.robot.set_face_pack", {"pack_id": pack_id},
+                    )
+                except Exception as sync_error:
+                    self.logger.bind(tag=TAG).warning(
+                        "face bundle reconnect sync failed "
+                        f"({type(sync_error).__name__})"
+                    )
+            _dotty_face_sync_task = asyncio.create_task(
+                _sync_face_bundle_after_connect(), name="face_bundle_reconnect_sync"
+            )
         try:
             await handler.handle_connection(websocket)
         except Exception as e:
             _dotty_handler_error = e
             self.logger.bind(tag=TAG).error(f"处理连接时出错: {e}")
         finally:
+            if _dotty_face_sync_task is not None and not _dotty_face_sync_task.done():
+                _dotty_face_sync_task.cancel()
             if _dotty_realtime is not None:
                 try:
                     await _dotty_realtime.close()

@@ -407,6 +407,58 @@ class SimpleHttpServer:
             "name": name, "enabled": enabled,
         })
 
+    async def _dotty_set_face_pack(self, request: "web.Request") -> "web.Response":
+        """POST /xiaozhi/admin/set-face-pack
+        Body: {"device_id": "<optional>", "pack_id": "<installed pack>"}
+
+        Queue the firmware MCP switch. The device emits face_pack_changed when
+        activation has completed; until then status remains pending.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        device_id = (data.get("device_id") or "").strip()
+        pack_id = (data.get("pack_id") or "").strip()
+        if pack_id not in ("classic", "crt-pixel", "aussie-host", "kid-bot"):
+            return web.json_response({"error": f"unknown face pack: {pack_id!r}"}, status=400)
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        resolved_id = _dotty_conn_device_id(conn, device_id)
+        conn._dotty_requested_face_pack = pack_id
+        conn._dotty_face_pack_pending = True
+        _spawn(
+            _dotty_device_command.call_tool(
+                conn, "self.robot.set_face_pack", {"pack_id": pack_id},
+            ),
+            name="set_face_pack_send",
+        )
+        realtime_bridge = getattr(conn, "_dotty_realtime_bridge", None)
+        if realtime_bridge is not None:
+            _spawn(
+                realtime_bridge.refresh_requested_profile(),
+                name="refresh_realtime_voice_profile",
+            )
+        return web.json_response(
+            {"ok": True, "device_id": resolved_id, "pack_id": pack_id, "pending": True},
+            status=202,
+        )
+
+    async def _dotty_face_pack_status(self, request: "web.Request") -> "web.Response":
+        device_id = (request.query.get("device_id") or "").strip()
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        return web.json_response({
+            "device_id": _dotty_conn_device_id(conn, device_id),
+            "requested_face_pack_id": getattr(conn, "_dotty_requested_face_pack", ""),
+            "active_face_pack_id": getattr(conn, "_dotty_active_face_pack", ""),
+            "pending": bool(getattr(conn, "_dotty_face_pack_pending", False)),
+            "success": bool(getattr(conn, "_dotty_face_pack_success", True)),
+            "reason": getattr(conn, "_dotty_face_pack_reason", ""),
+        })
+
     async def _dotty_set_face_identified(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/set-face-identified
         Body: {"device_id": "<optional>"}
@@ -796,6 +848,14 @@ class SimpleHttpServer:
                         web.post(
                             "/xiaozhi/admin/set-toggle",
                             self._dotty_set_toggle,
+                        ),
+                        web.post(
+                            "/xiaozhi/admin/set-face-pack",
+                            self._dotty_set_face_pack,
+                        ),
+                        web.get(
+                            "/xiaozhi/admin/face-pack-status",
+                            self._dotty_face_pack_status,
                         ),
                         web.post(
                             "/xiaozhi/admin/set-face-identified",

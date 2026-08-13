@@ -73,6 +73,7 @@ services:
       # the firmware pips desync from the dashboard on every reconnect.
       - DOTTY_KID_MODE_STATE=/var/lib/dotty-bridge/state/kid-mode
       - DOTTY_SMART_MODE_STATE=/var/lib/dotty-bridge/state/smart-mode
+      - DOTTY_FACE_BUNDLE_STATE=/var/lib/dotty-bridge/state/face-bundles.json
       # Shared admin-API secret (X-Admin-Token). Read from ./.env — `make
       # setup` generates it. Unset/empty = permissive (admin routes open);
       # set = this server enforces it AND every caller (bridge,
@@ -85,7 +86,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
       - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
-      - DOTTY_REALTIME_NAME=${DOTTY_REALTIME_NAME:-Dotty}
+      - DOTTY_REALTIME_NAME=${DOTTY_REALTIME_NAME:-StackChan}
       - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
       - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
       - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
@@ -127,6 +128,7 @@ services:
       # DOTTY DeviceCommand seam: MCP request ids + envelope + per-conn
       # serialized sends, shared by http_server.py + receiveAudioHandle.py
       - ./custom-providers/xiaozhi-patches/device_command.py:/opt/xiaozhi-esp32-server/core/utils/device_command.py:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
       - ./songs:/opt/xiaozhi-esp32-server/config/assets/songs:ro
       # DOTTY portal + admin routes + active-connection registry
       - ./custom-providers/xiaozhi-patches/portal_bridge.py:/opt/xiaozhi-esp32-server/core/portal_bridge.py:ro

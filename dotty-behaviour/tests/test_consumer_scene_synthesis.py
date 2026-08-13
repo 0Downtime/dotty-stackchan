@@ -48,7 +48,7 @@ def test_compose_with_vision_only() -> None:
         face_identity_ttl_sec=30.0, tz=_UTC,
     )
     assert out is not None
-    assert "Dotty sees a chair" in out["text"]
+    assert "StackChan sees a chair" in out["text"]
     assert "State: idle" in out["text"]
     assert out["has_vision"] is True
     assert out["has_audio_caption"] is False

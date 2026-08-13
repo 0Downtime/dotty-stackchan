@@ -131,7 +131,7 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	   printf -v "$$var" '%s' "$$ans"; \
 	 }; \
 	 prompt XIAOZHI_HOST    "XIAOZHI_HOST     (LAN IP of Docker host)" "192.168.1.10"  "$$XIAOZHI_HOST"; \
-	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "Dotty"   "$${ROBOT_NAME:-Dotty}"; \
+	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "StackChan" "$${ROBOT_NAME:-StackChan}"; \
 	 prompt YOUR_NAME       "YOUR_NAME        (your name / org)" "Brett"               "$$YOUR_NAME"; \
 	 prompt TZ_VALUE        "TZ_VALUE         (IANA timezone)" "Australia/Brisbane"    "$$TZ_VALUE"; \
 	 echo ""; \
