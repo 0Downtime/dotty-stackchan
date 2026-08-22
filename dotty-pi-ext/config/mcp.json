@@ -1,0 +1,44 @@
+{
+  "settings": {
+    "toolPrefix": "server",
+    "hostConfigDiscovery": "off",
+    "requestTimeoutMs": 5000,
+    "directTools": false,
+    "disableProxyTool": true,
+    "autoAuth": false,
+    "sampling": false,
+    "samplingAutoApprove": false,
+    "elicitation": false,
+    "outputGuard": {
+      "maxBytes": 8192,
+      "maxLines": 100,
+      "detailsMaxBytes": 2048
+    }
+  },
+  "mcpServers": {
+    "pilot": {
+      "command": "node",
+      "args": [
+        "src/mcp/pilot_server.mjs"
+      ],
+      "cwd": "${DOTTY_MCP_EXTENSION_DIR}",
+      "lifecycle": "eager",
+      "requestTimeoutMs": 5000,
+      "includeTools": ["pilot_lookup"],
+      "directTools": ["pilot_lookup"],
+      "exposeResources": false,
+      "disabled": false
+    },
+    "home_assistant": {
+      "url": "${HOMEASSISTANT_MCP_URL}/api/mcp",
+      "auth": "bearer",
+      "bearerTokenEnv": "HOMEASSISTANT_TOKEN",
+      "lifecycle": "eager",
+      "requestTimeoutMs": 5000,
+      "includeTools": ["GetLiveContext", "HassTurnOn", "HassTurnOff"],
+      "directTools": ["GetLiveContext", "HassTurnOn", "HassTurnOff"],
+      "exposeResources": false,
+      "disabled": true
+    }
+  }
+}

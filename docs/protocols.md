@@ -248,7 +248,7 @@ xiaozhi-server
 
 Each turn is a single JSONL object written to stdin; the agent streams JSONL response chunks back on stdout. Only TTS-bound text chunks are forwarded to xiaozhi-server — tool call details stay internal to the agent loop. The agent exits cleanly after each turn; `PiClient` re-invokes `docker exec` for the next turn.
 
-The dotty-pi agent loads the **dotty-pi-ext extension** at startup, which registers eight voice tools (`device_status`, `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`). Tool results never appear in the TTS stream.
+The dotty-pi agent loads the **dotty-pi-ext extension** at startup, which registers eight native voice tools (`device_status`, `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`). Private external MCP tools are separately allowlisted. Tool results never appear in the TTS stream.
 
 <a id="http-apis"></a>
 ## HTTP APIs

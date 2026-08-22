@@ -34,6 +34,7 @@ LLM:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -93,6 +94,7 @@ TAG = __name__
 logger = setup_logging()
 
 _DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 120.0
+_TURN_CONTEXT_MARKER = "[DOTTY_TURN_CONTEXT_V1]"
 
 
 def _read_kid_mode() -> bool:
@@ -172,7 +174,11 @@ _VOICE_TOOL_ROUTING = (
     "memory_lookup or recall_person for facts learned earlier; remember or "
     "remember_person when explicitly asked to retain a durable fact; play_song "
     "for requested music; take_photo for the current room or camera view; and "
-    "think_hard for precise math, technical, or factual reasoning. Call the "
+    "think_hard for precise math, technical, or factual reasoning; "
+    "pilot_pilot_lookup for the explicit MCP pilot topic; "
+    "home_assistant_GetLiveContext for selected live home sensor questions; "
+    "and home_assistant_HassTurnOn or home_assistant_HassTurnOff only for one "
+    "specifically named light. Call the "
     "matching tool first and base the spoken answer on its result. For greetings, "
     "opinions, simple conversation, or general knowledge you already know, answer "
     "without a tool. Never substitute file, shell, or coding tools. If no "
@@ -250,6 +256,7 @@ def _wrap_with_sandwich(
     user_text: str,
     kid_mode: bool,
     live_device_status: str = "",
+    turn_context: dict[str, object] | None = None,
 ) -> str:
     """Append the HARD CONSTRAINTS suffix to the user's text via the shared
     textUtils.build_turn_suffix contract — emoji-prefix
@@ -264,7 +271,44 @@ def _wrap_with_sandwich(
             f"device_status and received {live_device_status}. Do not call it "
             "again. State the exact relevant value in the spoken answer."
         )
-    return user_text + verified + _VOICE_TOOL_ROUTING + build_turn_suffix(kid_mode)
+    prompt = user_text + verified + _VOICE_TOOL_ROUTING + build_turn_suffix(kid_mode)
+    if turn_context is not None:
+        payload = json.dumps(turn_context, separators=(",", ":"), ensure_ascii=False)
+        encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+        prompt += f"\n{_TURN_CONTEXT_MARKER}{encoded}"
+    return prompt
+
+
+def _tool_result_text(result: object) -> str:
+    if not isinstance(result, dict):
+        return ""
+    content = result.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
+
+
+def _ha_confirmation_prompt(tool_event: dict) -> str | None:
+    name = str(tool_event.get("name") or "")
+    if not (name.lower().endswith("hassturnon") or name.lower().endswith("hassturnoff")):
+        return None
+    result_text = _tool_result_text(tool_event.get("result"))
+    if "DOTTY_CONFIRMATION_REQUIRED:" not in result_text:
+        return None
+    arguments = tool_event.get("arguments")
+    friendly = arguments.get("name") if isinstance(arguments, dict) else None
+    if not isinstance(friendly, str) or not friendly.strip():
+        return None
+    friendly = " ".join(friendly.strip().split())
+    action = "on" if name.lower().endswith("hassturnon") else "off"
+    return (
+        f'Turn {action} {friendly}? Say "Confirm {action} {friendly}" '
+        "within 15 seconds."
+    )
 
 
 def _enforce_leading_emoji(chunks: Iterator[str]) -> Iterator[str]:
@@ -333,6 +377,7 @@ class LLMProvider(LLMProviderBase):
         self._active_session_id: str | None = None
         self._last_turn_at: float | None = None
         self._has_pi_context = False
+        self._turn_sequence = 0
         self._session_idle_timeout = _session_idle_timeout_seconds(config)
         msg = f"PiVoiceLLM ready (container={self._container} kid_mode={self._kid_mode})"
         try:
@@ -353,17 +398,22 @@ class LLMProvider(LLMProviderBase):
         if not user_text:
             yield f"{FALLBACK_EMOJI} (empty turn)"
             return
+        # Keep ordinary follow-up turns in the same pi conversation. A new
+        # xiaozhi audio-channel session is the authoritative boundary. If an
+        # integration omits the ID, fall back to xiaozhi's no-speech timeout.
+        normalized_session_id = str(session_id or "").strip() or None
+        self._turn_sequence += 1
         live_device_status = _fetch_live_device_status(user_text)
         prompt = _wrap_with_sandwich(
             user_text,
             self._kid_mode,
             live_device_status=live_device_status,
+            turn_context={
+                "session": normalized_session_id or "",
+                "turn": self._turn_sequence,
+                "utterance": user_text,
+            },
         )
-
-        # Keep ordinary follow-up turns in the same pi conversation. A new
-        # xiaozhi audio-channel session is the authoritative boundary. If an
-        # integration omits the ID, fall back to xiaozhi's no-speech timeout.
-        normalized_session_id = str(session_id or "").strip() or None
         now = time.monotonic()
         reset_reason: str | None = None
         if self._has_pi_context:
@@ -378,7 +428,6 @@ class LLMProvider(LLMProviderBase):
                 and now - self._last_turn_at >= self._session_idle_timeout
             ):
                 reset_reason = "id-less session idle timeout"
-
         if reset_reason is not None:
             try:
                 self._client.new_session()
@@ -402,8 +451,32 @@ class LLMProvider(LLMProviderBase):
             # Emoji enforcement precedes filtering, matching OpenAICompat: in
             # kid mode the filter still makes one atomic whole-turn decision;
             # outside it, chunks stream after the first meaningful one.
+            tool_events: list[dict] = []
+            model_chunks = list(self._client.iter_turn_text(
+                prompt,
+                on_tool_event=tool_events.append,
+            ))
+            confirmation_prompt = next(
+                (
+                    prompt_text
+                    for event in tool_events
+                    if (prompt_text := _ha_confirmation_prompt(event)) is not None
+                ),
+                None,
+            )
+            if confirmation_prompt is not None:
+                # The product contract requires this exact sentence. It is
+                # generated from the already-blocked tool call, not by the model.
+                yield confirmation_prompt
+                return
+            cancelled = any(
+                "DOTTY_CONFIRMATION_" in _tool_result_text(event.get("result"))
+                and event.get("is_error") is True
+                for event in tool_events
+            )
+            selected_chunks = ["😐 Light action cancelled."] if cancelled else model_chunks
             for chunk in filter_tts_stream(
-                _enforce_leading_emoji(self._client.iter_turn_text(prompt)),
+                _enforce_leading_emoji(iter(selected_chunks)),
                 self._kid_mode,
                 on_hit=self._on_filter_hit,
             ):
@@ -425,3 +498,23 @@ class LLMProvider(LLMProviderBase):
     def close(self) -> None:
         """xiaozhi may call this on shutdown — make sure pi cleans up."""
         self._client.close()
+
+    def cancel_pending_confirmation(self, session_id: object) -> None:
+        """Clear Pi state when the active Xiaozhi voice connection closes."""
+        normalized = str(session_id or "").strip() or None
+        if normalized is None:
+            return
+        with self._turn_lock:
+            if normalized != self._active_session_id:
+                return
+            try:
+                self._client.new_session()
+            except PiClientError:
+                logger.exception("PiVoiceLLM: disconnect session reset failed")
+                # A dead process cannot retain an approval. Closing also makes
+                # the next ordinary turn start a fresh Pi process.
+                self._client.close()
+            finally:
+                self._active_session_id = None
+                self._last_turn_at = None
+                self._has_pi_context = False
