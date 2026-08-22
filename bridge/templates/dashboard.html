@@ -513,7 +513,8 @@
     setFeedFilter(b.dataset.feedFilter);
   });
 
-  // F9 perception feed — append events into the unified activity feed.
+  // Unified replay + live activity feed. Turn snapshots are updated in place;
+  // perception events remain compact immutable rows between them.
   var PERCEPTION_BADGE_CLASS = {
     face_detected: 'badge-success',
     face_lost: 'badge-error',
@@ -528,23 +529,59 @@
     security_pose: 'badge-warning',
     head_turn: 'badge-warning',
   };
-  function prependFeedEvent(ev) {
+  var feedRows = Object.create(null);
+  var PHASE_LABEL = {
+    asr_completed: 'Heard', model_started: 'Thinking', tool_started: 'Tool',
+    tool_finished: 'Tool', first_text: 'Replying', response_ready: 'Reply ready',
+    tts_started: 'Speaking', playback_started: 'Speaking', completed: 'Done',
+    failed: 'Error', aborted: 'Aborted'
+  };
+  var PHASE_ORDER = {
+    asr_completed: 0, model_started: 1, tool_started: 2, tool_finished: 2,
+    first_text: 3, response_ready: 3, tts_started: 4,
+    playback_started: 4, completed: 5, failed: 5, aborted: 5
+  };
+  var STAGES = ['Heard', 'Thinking', 'Tool', 'Reply', 'Speaking', 'Done'];
+
+  function feedRow(item, kind) {
     var feed = document.getElementById('feed-live');
-    if (!feed) return;
+    if (!feed) return null;
     var empty = document.getElementById('feed-empty');
     if (empty) empty.remove();
 
-    var row = document.createElement('div');
+    var key = item.item_id || (kind + ':' + item.event_id);
+    var row = feedRows[key];
+    if (!row) {
+      row = document.createElement('div');
+      feedRows[key] = row;
+    }
     row.className = 'feed-row px-3 py-2';
-    row.setAttribute('data-kind', 'event');
-    row.setAttribute('data-error', 'false');
+    row.setAttribute('data-kind', kind);
+    row.setAttribute('data-error', item.error ? 'true' : 'false');
+    while (row.firstChild) row.removeChild(row.firstChild);
+    feed.insertBefore(row, feed.firstChild);
+    while (feed.children.length > 100) {
+      var removed = feed.lastElementChild;
+      if (removed) {
+        Object.keys(feedRows).forEach(function (k) {
+          if (feedRows[k] === removed) delete feedRows[k];
+        });
+        removed.remove();
+      }
+    }
+    return row;
+  }
+
+  function prependFeedEvent(ev) {
+    var row = feedRow(ev, 'event');
+    if (!row) return;
 
     var head = document.createElement('div');
     head.className = 'flex items-baseline gap-2 flex-wrap';
 
     var ts = document.createElement('span');
     ts.className = 'text-xs text-base-content/50 font-mono';
-    var d = new Date((ev.ts || (Date.now() / 1000)) * 1000);
+    var d = new Date((ev.ts || Date.now() / 1000) * 1000);
     ts.textContent = d.toLocaleTimeString();
     head.appendChild(ts);
 
@@ -568,60 +605,32 @@
       row.appendChild(data);
     }
 
-    feed.insertBefore(row, feed.firstChild);
-    while (feed.children.length > 100) feed.removeChild(feed.lastElementChild);
   }
-  (function () {
-    if (typeof EventSource === 'undefined') return;
-    var psrc = new EventSource('/api/perception/feed');
-    psrc.onmessage = function (ev) {
-      var data;
-      try { data = JSON.parse(ev.data); } catch (e) { return; }
-      prependFeedEvent(data);
-      // Nudge event-driven cards (Perception, State, status-strip) on
-      // indicator-relevant events. This replaces dashboard-wide polling for
-      // these cards — they only re-fetch when something actually changed.
-      var name = data && data.name;
-      if (name === 'face_detected' || name === 'face_lost'
-          || name === 'face_recognized' || name === 'chat_status'
-          || name === 'state_changed' || name === 'dance_started'
-          || name === 'dance_ended' || name === 'audio_captioned'
-          || name === 'scene_synthesised') {
-        window.dispatchEvent(new CustomEvent('dotty-refresh'));
-      }
-    };
-  })();
 
-  // Turn stream — append turns into the unified activity feed and surface
-  // failures as a toast.
   function prependFeedTurn(data) {
-    var feed = document.getElementById('feed-live');
-    if (!feed) return;
-    var empty = document.getElementById('feed-empty');
-    if (empty) empty.remove();
-
-    var row = document.createElement('div');
-    row.className = 'feed-row px-3 py-2';
-    row.setAttribute('data-kind', 'turn');
-    row.setAttribute('data-error', data.error ? 'true' : 'false');
+    var row = feedRow(data, 'turn');
+    if (!row) return;
 
     var head = document.createElement('div');
     head.className = 'flex items-baseline gap-2 flex-wrap';
     var ts = document.createElement('span');
     ts.className = 'text-xs text-base-content/50 font-mono';
-    var d = new Date((data.ts || (Date.now() / 1000)) * 1000);
+    var d = new Date((data.ts || Date.now() / 1000) * 1000);
     ts.textContent = d.toLocaleTimeString();
     head.appendChild(ts);
 
     var kind = document.createElement('span');
     kind.className = 'badge badge-ghost badge-xs';
-    kind.textContent = 'turn';
+    kind.textContent = PHASE_LABEL[data.phase] || data.phase || 'turn';
+    if (data.phase === 'completed') kind.className = 'badge badge-success badge-xs';
+    if (data.phase === 'failed') kind.className = 'badge badge-error badge-xs';
+    if (data.phase === 'aborted') kind.className = 'badge badge-warning badge-xs';
     head.appendChild(kind);
 
-    if (data.channel) {
+    if (data.device_id) {
       var ch = document.createElement('span');
       ch.className = 'badge badge-ghost badge-xs';
-      ch.textContent = data.channel;
+      ch.textContent = data.device_id;
       head.appendChild(ch);
     }
     if (data.error) {
@@ -630,13 +639,30 @@
       er.textContent = 'err';
       head.appendChild(er);
     }
-    if (typeof data.latency_ms === 'number') {
+    if (data.timings && typeof data.timings.total_ms === 'number') {
       var lat = document.createElement('span');
       lat.className = 'text-xs text-base-content/40 ml-auto';
-      lat.textContent = data.latency_ms + 'ms';
+      lat.textContent = Math.round(data.timings.total_ms) + 'ms';
       head.appendChild(lat);
     }
     row.appendChild(head);
+
+    var rail = document.createElement('div');
+    rail.className = 'flex items-center gap-1 mt-2 overflow-x-auto';
+    var current = PHASE_ORDER[data.phase];
+    STAGES.forEach(function (label, index) {
+      if (index) {
+        var arrow = document.createElement('span');
+        arrow.className = 'text-base-content/20 text-xs'; arrow.textContent = '›';
+        rail.appendChild(arrow);
+      }
+      var stage = document.createElement('span');
+      stage.className = 'text-xs whitespace-nowrap ' +
+        (typeof current === 'number' && index <= current ? 'text-primary font-semibold' : 'text-base-content/30');
+      stage.textContent = label;
+      rail.appendChild(stage);
+    });
+    row.appendChild(rail);
 
     var req = document.createElement('div');
     req.className = 'text-sm break-words mt-1';
@@ -651,24 +677,47 @@
     } else {
       var resp = document.createElement('div');
       resp.className = 'text-sm text-base-content/80 break-words whitespace-pre-wrap mt-1';
-      var emoji = data.emoji_used ? (data.emoji_used + ' ') : '';
-      resp.textContent = emoji + (data.response_text || '');
+      resp.textContent = data.response_text || data.emoji_used ||
+        (data.phase === 'completed' ? '(no response text)' : '');
       row.appendChild(resp);
     }
 
-    feed.insertBefore(row, feed.firstChild);
-    while (feed.children.length > 100) feed.removeChild(feed.lastElementChild);
+    var hasDetails = (data.tools && data.tools.length) ||
+      (data.timings && Object.keys(data.timings).length);
+    if (hasDetails) {
+      var details = document.createElement('details');
+      details.className = 'mt-2 text-xs text-base-content/60';
+      var summary = document.createElement('summary');
+      summary.className = 'cursor-pointer select-none';
+      summary.textContent = 'Timeline details';
+      details.appendChild(summary);
+      if (data.timings) {
+        var timing = document.createElement('div');
+        timing.className = 'mt-1 font-mono break-words';
+        timing.textContent = Object.keys(data.timings).map(function (key) {
+          return key.replace(/_ms$/, '') + '=' + Math.round(data.timings[key]) + 'ms';
+        }).join(' · ');
+        details.appendChild(timing);
+      }
+      (data.tools || []).forEach(function (tool) {
+        var toolLine = document.createElement('div');
+        toolLine.className = 'mt-1 font-mono';
+        toolLine.textContent = 'tool ' + tool.name + ' · ' + tool.status +
+          (typeof tool.duration_ms === 'number' ? ' · ' + Math.round(tool.duration_ms) + 'ms' : '');
+        details.appendChild(toolLine);
+      });
+      row.appendChild(details);
+    }
   }
+
   (function () {
     if (typeof EventSource === 'undefined') return;
-    var src = new EventSource('/ui/events');
+    var src = new EventSource('/ui/activity');
     src.onopen = function () { connState.sse = true; refreshConnectionBanner(); };
-    src.onmessage = function (ev) {
+    src.addEventListener('turn', function (ev) {
       var data;
       try { data = JSON.parse(ev.data); } catch (e) { return; }
       prependFeedTurn(data);
-      // Trigger refresh on polling tiles (status-strip, etc.) so they
-      // pick up new state immediately on every turn.
       window.dispatchEvent(new CustomEvent('dotty-refresh'));
       if (data && data.error) {
         var toast = document.getElementById('error-toast');
@@ -679,7 +728,20 @@
           setTimeout(function () { toast.classList.add('hidden'); }, 8000);
         }
       }
-    };
+    });
+    src.addEventListener('event', function (ev) {
+      var data;
+      try { data = JSON.parse(ev.data); } catch (e) { return; }
+      prependFeedEvent(data);
+      var name = data && data.name;
+      if (name === 'face_detected' || name === 'face_lost'
+          || name === 'face_recognized' || name === 'chat_status'
+          || name === 'state_changed' || name === 'dance_started'
+          || name === 'dance_ended' || name === 'audio_captioned'
+          || name === 'scene_synthesised') {
+        window.dispatchEvent(new CustomEvent('dotty-refresh'));
+      }
+    });
     src.onerror = function () {
       connState.sse = false; refreshConnectionBanner();
     };

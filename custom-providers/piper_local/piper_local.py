@@ -13,17 +13,14 @@ from core.providers.tts.base import TTSProviderBase
 from core.providers.tts.dto.dto import ContentType, InterfaceType, SentenceType
 from core.utils import opus_encoder_utils, textUtils
 from core.utils.tts import MarkdownCleaner
+from core.utils.activity_tts import ActivityPlaybackMixin
 
 TAG = __name__
 logger = setup_logging()
 
 
-# Piper owns a sizeable ONNX Runtime session.  xiaozhi creates a fresh TTS
-# provider for every device WebSocket, so loading the voice in each provider
-# permanently grows the process RSS when firmware reconnects.  Keep the model
-# process-wide while leaving queues, encoders, and connection state per
-# provider.  The lock also serializes the uncommon overlap between an old
-# connection winding down and its replacement starting synthesis.
+# Piper owns a sizeable ONNX Runtime session. Keep it process-wide while
+# leaving queues, encoders, and activity state per provider connection.
 _VOICE_CACHE = {}
 _VOICE_CACHE_LOCK = threading.Lock()
 
@@ -38,7 +35,7 @@ def _cached_voice(model_path, config_path):
         return cached
 
 
-class TTSProvider(TTSProviderBase):
+class TTSProvider(ActivityPlaybackMixin, TTSProviderBase):
     def __init__(self, config, delete_audio_file):
         super().__init__(config, delete_audio_file)
         self.interface_type = InterfaceType.SINGLE_STREAM
@@ -105,6 +102,16 @@ class TTSProvider(TTSProviderBase):
             try:
                 message = self.tts_text_queue.get(timeout=1)
                 if message.sentence_type == SentenceType.FIRST:
+                    self.current_sentence_id = message.sentence_id
+                    self.activity_bind_sentence(message.sentence_id)
+                if (
+                    self.conn.client_abort
+                    or message.sentence_id != self.conn.sentence_id
+                ):
+                    if message.sentence_type == SentenceType.FIRST:
+                        self.activity_abort_sentence(message.sentence_id)
+                    continue
+                if message.sentence_type == SentenceType.FIRST:
                     self.tts_stop_request = False
                     self.processed_chars = 0
                     self.tts_text_buff = []
@@ -163,13 +170,16 @@ class TTSProvider(TTSProviderBase):
         )
 
         try:
+            self.activity_tts_started(getattr(self, "current_sentence_id", None))
             self.pcm_buffer.clear()
-            self.tts_audio_queue.put((SentenceType.FIRST, [], text))
+            self.tts_audio_queue.put((
+                SentenceType.FIRST, [], text,
+                getattr(self, "current_sentence_id", None),
+            ))
 
             raw_pcm = bytearray()
             with self._voice_lock:
-                chunks = self.voice_obj.synthesize(text, syn_config=self.syn_config)
-                for chunk in chunks:
+                for chunk in self.voice_obj.synthesize(text, syn_config=self.syn_config):
                     if chunk and chunk.audio_int16_bytes:
                         raw_pcm.extend(chunk.audio_int16_bytes)
 
@@ -211,7 +221,11 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(
                 f"Piper synth exception for {text!r}: {e}"
             )
-            self.tts_audio_queue.put((SentenceType.LAST, [], None))
+            self.activity_tts_failed(getattr(self, "current_sentence_id", None), e)
+            self.tts_audio_queue.put((
+                SentenceType.LAST, [], None,
+                getattr(self, "current_sentence_id", None),
+            ))
 
     async def close(self):
         await super().close()

@@ -62,6 +62,8 @@ services:
       - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
       - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
       - DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS=${DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS:-8}
+      - DOTTY_ACTIVITY_ENABLED=${DOTTY_ACTIVITY_ENABLED:-false}
+      - DOTTY_ACTIVITY_URL=http://<XIAOZHI_HOST>:8081/admin/activity
     ports:
       - "8000:8000"
       - "8003:8003"
@@ -72,6 +74,9 @@ services:
       - ./custom-providers/openai_compat:/opt/xiaozhi-esp32-server/core/providers/llm/openai_compat
       - ./custom-providers/pi_voice:/opt/xiaozhi-esp32-server/core/providers/llm/pi_voice
       - ./custom-providers/openai_realtime:/opt/xiaozhi-esp32-server/core/providers/realtime:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_telemetry.py:/opt/xiaozhi-esp32-server/core/utils/activity_telemetry.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_tts.py:/opt/xiaozhi-esp32-server/core/utils/activity_tts.py:ro
       # PiVoiceLLM shells out to `docker exec -i dotty-pi pi --mode rpc ...`,
       # so this container needs the docker CLI binary AND the host docker
       # socket. WARNING: mounting /var/run/docker.sock gives this container

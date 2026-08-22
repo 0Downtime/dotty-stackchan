@@ -3,6 +3,8 @@ import re
 import time
 import json
 import asyncio
+import uuid
+from collections import deque
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
@@ -17,6 +19,11 @@ from core.handle.sendAudioHandle import send_stt_message, SentenceType
 # + per-conn serialized sends, shared with the admin routes in http_server.py
 # (mounted at core/utils/device_command.py).
 from core.utils.device_command import call_tool as _mcp_call_tool
+try:
+    from core.utils.activity_telemetry import emit_turn as _emit_activity_turn
+except ImportError:  # pragma: no cover - local tests without container mounts
+    def _emit_activity_turn(*args, **kwargs):
+        return False
 
 TAG = __name__
 
@@ -586,13 +593,40 @@ def _with_room_view_marker(
     return f"[ROOM_VIEW]\n{desc}\n{match}\n{text}"
 
 
-def _submit_chat(conn: "ConnectionHandler", text: str) -> None:
+def _submit_chat(
+    conn: "ConnectionHandler",
+    text: str,
+    *,
+    turn_id: str | None = None,
+    request_text: str | None = None,
+) -> None:
     """Submit `text` to the LLM via the connection's executor, with
     the room-view marker prepended automatically when a fresh
     description is cached. Single chokepoint for description
     propagation — every voice path goes through here.
     """
-    conn.executor.submit(conn.chat, _with_room_view_marker(conn, text))
+    prompt = _with_room_view_marker(conn, text)
+    if turn_id:
+        conn._dotty_active_turn_id = turn_id
+        pending = getattr(conn, "_dotty_pending_activity_turns", None)
+        if pending is None:
+            pending = deque()
+            conn._dotty_pending_activity_turns = pending
+        pending.append((
+            turn_id,
+            float(getattr(conn, "_dotty_activity_start_ts", time.time())),
+        ))
+        prompt = json.dumps({
+            "content": prompt,
+            "_dotty_turn_id": turn_id,
+            "_dotty_request_text": request_text or text,
+        }, ensure_ascii=False)
+    conn.executor.submit(conn.chat, prompt)
+
+
+def _activity_device_id(conn: "ConnectionHandler") -> str | None:
+    headers = getattr(conn, "headers", None) or {}
+    return headers.get("device-id") or getattr(conn, "device_id", None)
 
 
 # ---------- Dance / singing mode ----------
@@ -1085,7 +1119,27 @@ async def startToChat(conn: "ConnectionHandler", text):
             await max_out_size(conn)
             return
 
+    previous_turn_id = getattr(conn, "_dotty_active_turn_id", None)
+    turn_id = uuid.uuid4().hex
+    activity_started = time.time()
+    conn._dotty_activity_start_ts = activity_started
+    conn._dotty_active_turn_id = turn_id
+    vad_last_ms = float(getattr(conn, "vad_last_voice_time", 0.0) or 0.0)
+    asr_ms = max(0.0, activity_started * 1000.0 - vad_last_ms) if vad_last_ms else 0.0
+    _emit_activity_turn(
+        "asr_completed", turn_id,
+        session_id=getattr(conn, "session_id", None),
+        device_id=_activity_device_id(conn),
+        request_text=str(actual_text), asr_ms=asr_ms,
+    )
+
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
+        if previous_turn_id and previous_turn_id != turn_id:
+            _emit_activity_turn(
+                "aborted", previous_turn_id,
+                session_id=getattr(conn, "session_id", None),
+                device_id=_activity_device_id(conn),
+            )
         dance_task = getattr(conn, "_dance_task", None)
         if dance_task and not dance_task.done():
             await _cancel_active_dance(conn, dance_task)
@@ -1102,6 +1156,12 @@ async def startToChat(conn: "ConnectionHandler", text):
     intent_handled = await handle_user_intent(conn, actual_text)
 
     if intent_handled:
+        _emit_activity_turn(
+            "completed", turn_id,
+            session_id=getattr(conn, "session_id", None),
+            device_id=_activity_device_id(conn),
+            total_ms=(time.time() - activity_started) * 1000.0,
+        )
         return
 
     await send_stt_message(conn, actual_text)
@@ -1132,10 +1192,11 @@ async def startToChat(conn: "ConnectionHandler", text):
             f"Wake phrase: {current_state} -> idle"
         )
         await _send_set_state(conn, "idle")
-        conn.executor.submit(
-            conn.chat,
+        _submit_chat(
+            conn,
             "[STATE_WAKE] You just woke up. Say only a SHORT greeting "
             "(under 10 words). Examples: 'I'm here!' / 'Hello again.'",
+            turn_id=turn_id, request_text=user_text,
         )
         return
 
@@ -1146,18 +1207,19 @@ async def startToChat(conn: "ConnectionHandler", text):
             f"State phrase: {current_state} -> {target_state}"
         )
         await _send_set_state(conn, target_state)
-        conn.executor.submit(
-            conn.chat,
+        _submit_chat(
+            conn,
             f"[STATE_CHANGE:{target_state}] You just entered {target_state} "
             f"state. Say only a SHORT one-liner (under 12 words). "
             f"Suggested: {ack_hint!r}",
+            turn_id=turn_id, request_text=user_text,
         )
         return
 
     if _is_help_request(user_text):
         conn.logger.bind(tag=TAG).info(f"Help intent detected: {user_text[:60]}")
-        conn.executor.submit(
-            conn.chat,
+        _submit_chat(
+            conn,
             "[HELP_SUMMARY] The user asked what you can do. Reply in 2-3 short "
             "sentences listing your main abilities, in plain spoken language: "
             "you can chat, look around with your camera (\"what do you see\"), "
@@ -1165,6 +1227,7 @@ async def startToChat(conn: "ConnectionHandler", text):
             "macarena\", \"sing a song\"), and switch states like sleep or "
             "watching the room (\"go to sleep\", \"keep watch\"). Keep it "
             "warm and brief, do NOT list every phrase — just the categories.",
+            turn_id=turn_id, request_text=user_text,
         )
         return
 
@@ -1178,15 +1241,25 @@ async def startToChat(conn: "ConnectionHandler", text):
                 f'The child said: "{user_text}"\n'
                 f"Respond naturally about what you see, as if looking at it together."
             )
-            _submit_chat(conn, vision_prompt)
+            _submit_chat(
+                conn, vision_prompt, turn_id=turn_id, request_text=user_text,
+            )
             return
 
     if _is_dance_request(user_text):
         dance_name = _detect_dance_name(user_text)
         await _handle_dance(conn, dance_name)
+        _emit_activity_turn(
+            "completed", turn_id,
+            session_id=getattr(conn, "session_id", None),
+            device_id=_activity_device_id(conn),
+            total_ms=(time.time() - activity_started) * 1000.0,
+        )
         return
 
-    _submit_chat(conn, actual_text)
+    _submit_chat(
+        conn, actual_text, turn_id=turn_id, request_text=user_text,
+    )
 
 
 async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):

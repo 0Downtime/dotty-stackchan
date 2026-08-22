@@ -66,7 +66,9 @@ class FakeClient:
     def new_session(self) -> None:
         self.new_session_calls += 1
 
-    def iter_turn_text(self, prompt: str, on_tool_event=None) -> Iterator[str]:
+    def iter_turn_text(
+        self, prompt: str, on_tool_event=None, *, event_callback=None,
+    ) -> Iterator[str]:
         self.prompts.append(prompt)
         chunks = self.scripted_chunks.pop(0) if self.scripted_chunks else []
         err = self.scripted_errors.pop(0) if self.scripted_errors else None
@@ -76,7 +78,11 @@ class FakeClient:
         if on_tool_event is not None:
             for event in events:
                 on_tool_event(event)
+        if event_callback:
+            event_callback({"type": "model_started", "ts": 1.0})
         for c in chunks:
+            if event_callback:
+                event_callback({"type": "text_delta", "ts": 1.1})
             yield c
 
     def recent_stderr(self) -> list[str]:
@@ -173,6 +179,28 @@ class TestSandwichInjection(unittest.TestCase):
     def test_json_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": '{"content": "remember purple"}'}]
         self.assertEqual(_last_user_text(dialogue), "remember purple")
+
+    def test_private_turn_envelope_is_stripped_and_correlated(self):
+        client = FakeClient()
+        client.script_turn(["😊 hello"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        dialogue = [{
+            "role": "user",
+            "content": '{"content":"hello","_dotty_turn_id":"turn-7",'
+                       '"_dotty_request_text":"hello"}',
+        }]
+        with patch("pi_voice.pi_voice._emit_activity_turn") as emit:
+            self.assertEqual(list(provider.response("session-7", dialogue)), ["😊 hello"])
+        self.assertTrue(client.prompts[0].startswith("hello\n\nVOICE TOOL ROUTING:"))
+        self.assertNotIn("_dotty_turn_id", client.prompts[0])
+        phases = [call.args[:2] for call in emit.call_args_list]
+        self.assertIn(("model_started", "turn-7"), phases)
+        self.assertIn(("first_text", "turn-7"), phases)
+        self.assertIn(("response_ready", "turn-7"), phases)
+        response_call = next(
+            call for call in emit.call_args_list if call.args[0] == "response_ready"
+        )
+        self.assertEqual(response_call.kwargs["response_text"], "😊 hello")
 
     def test_mapping_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": {"content": "think carefully"}}]
@@ -347,7 +375,9 @@ class TestNewSessionLifecycle(unittest.TestCase):
                 self.first_started = threading.Event()
                 self.release_first = threading.Event()
 
-            def iter_turn_text(self, prompt: str, on_tool_event=None) -> Iterator[str]:
+            def iter_turn_text(
+                self, prompt: str, on_tool_event=None, *, event_callback=None,
+            ) -> Iterator[str]:
                 self.prompts.append(prompt)
                 self.active += 1
                 self.max_active = max(self.max_active, self.active)

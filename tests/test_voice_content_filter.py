@@ -167,7 +167,7 @@ class TestPiVoiceWiring(unittest.TestCase):
         def new_session(self):
             pass
 
-        def iter_turn_text(self, prompt, on_tool_event=None):
+        def iter_turn_text(self, prompt, on_tool_event=None, *, event_callback=None):
             yield from self._chunks
 
         def recent_stderr(self):
@@ -215,7 +215,7 @@ class TestPiVoiceWiring(unittest.TestCase):
             def new_session(self):
                 pass
 
-            def iter_turn_text(self, prompt, on_tool_event=None):
+            def iter_turn_text(self, prompt, on_tool_event=None, *, event_callback=None):
                 yield from next(self.turns)
                 self.completed += 1
 
