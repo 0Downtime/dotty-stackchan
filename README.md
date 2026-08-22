@@ -112,6 +112,7 @@ For what the stack *is* underneath — hardware specs, protocol docs, model fact
 - [docs/architecture.md](./docs/architecture.md) — end-to-end data flow, topology, deployment files, admin surface, perception bus, threat model.
 - [docs/hardware.md](./docs/hardware.md) — M5Stack StackChan body + firmware lineage + on-device MCP tool catalog.
 - [docs/voice-pipeline.md](./docs/voice-pipeline.md) — xiaozhi-esp32-server internals, FunASR/SenseVoice, VAD, TTS.
+- [docs/activity-timeline.md](./docs/activity-timeline.md) — opt-in grouped voice-turn and perception telemetry in the dashboard.
 - [docs/brain.md](./docs/brain.md) — model matrix, the pi agent runtime, and how voice turns reach it.
 - [docs/protocols.md](./docs/protocols.md) — Xiaozhi WS framing, MCP-over-WS, pi RPC, the dashboard HTTP API, emotion channel.
 - [docs/modes.md](./docs/modes.md) — behavioural mode taxonomy + LED contract + transition diagram (with shipped-vs-planned breakdown).

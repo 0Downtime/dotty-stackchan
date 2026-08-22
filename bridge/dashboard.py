@@ -27,6 +27,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from bridge.activity import activity_store
+
 log = logging.getLogger("dashboard")
 
 # Bridge wires its in-process message handler in via configure(). Lets the
@@ -2099,42 +2101,39 @@ async def security_recent(request: Request, device_id: str) -> Any:
     return templates.TemplateResponse(request, "security_panel.html", ctx)
 
 
-# --- P13 + P12: SSE event stream for live log + error toasts -------------
+# --- Unified replay + live activity stream -------------------------------
 
-@router.get("/events", include_in_schema=False)
+@router.get("/activity", include_in_schema=False)
+@router.get("/events", include_in_schema=False)  # compatibility alias
 async def events_stream(request: Request) -> StreamingResponse:
-    """Server-Sent Events stream of completed conversation turns.
-
-    Each event is one JSON object: {ts, channel, request_text, response_text,
-    latency_ms, error, emoji_used}. The bridge's ConvoLogger broadcasts on
-    every turn. Heartbeats every 15s keep proxies / browsers awake.
-    """
-    subscribe = _state.get("subscribe_events")
-    unsubscribe = _state.get("unsubscribe_events")
-    if subscribe is None or unsubscribe is None:
-        raise HTTPException(503, "event broadcast not configured")
-    queue = subscribe()
+    """Replay and stream grouped turns plus hardware/perception events."""
+    queue, replay = activity_store.subscribe()
 
     async def gen():
         try:
-            # Tell EventSource how long to wait before reconnecting on drop.
             yield "retry: 5000\n\n".encode()
+            for item in replay:
+                event_name = item.get("item_type", "event")
+                event_id = item.get("event_id", item.get("item_id", ""))
+                payload = json.dumps(item, ensure_ascii=False)
+                yield (
+                    f"id: {event_id}\nevent: {event_name}\ndata: {payload}\n\n"
+                ).encode()
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    # Strip the heavy [Context] block before pushing — clients
-                    # only want the cleaned user payload.
-                    event = {**event,
-                             "request_text": _clean_request_text(
-                                 event.get("request_text") or "")}
-                    payload = json.dumps(event, ensure_ascii=False)
-                    yield f"data: {payload}\n\n".encode()
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_name = item.get("item_type", "event")
+                    event_id = item.get("event_id", item.get("item_id", ""))
+                    payload = json.dumps(item, ensure_ascii=False)
+                    yield (
+                        f"id: {event_id}\nevent: {event_name}\ndata: {payload}\n\n"
+                    ).encode()
                 except asyncio.TimeoutError:
                     yield b": heartbeat\n\n"
         finally:
-            unsubscribe(queue)
+            activity_store.unsubscribe(queue)
 
     return StreamingResponse(
         gen(),
@@ -2144,5 +2143,4 @@ async def events_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
-
 

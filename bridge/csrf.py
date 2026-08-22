@@ -5,8 +5,9 @@ cookie containing a random per-session token plus an HMAC signature.
 Mutating requests under `/ui/` must echo the raw token back in the
 `X-CSRF-Token` header (htmx does this via the configRequest listener in
 dashboard.html, which reads the token from a `<meta name="csrf-token">`
-tag). API endpoints under `/api/...`, `/metrics`, and `/health` are
-exempt — they're machine-to-machine and have their own auth model.
+tag). API endpoints under `/api/...`, `/metrics`, `/health`, and the exact
+machine-ingest path `/admin/activity` are exempt — they have their own auth
+model. Other `/admin/*` mutations remain protected.
 
 Kill switch: set `DOTTY_CSRF_ENFORCE=0` to log-only mode (cookie still
 issued, mismatches logged as `csrf would-block`, requests pass through).
@@ -30,7 +31,7 @@ log = logging.getLogger("csrf")
 COOKIE_NAME = "dotty_csrf"
 HEADER_NAME = "X-CSRF-Token"
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
-_EXEMPT_PREFIXES = ("/api/", "/metrics", "/health")
+_EXEMPT_PREFIXES = ("/api/", "/metrics", "/health", "/admin/activity")
 
 
 def _load_secret() -> bytes:

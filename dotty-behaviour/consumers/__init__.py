@@ -16,6 +16,7 @@ asyncio.create_task — same lifecycle the bridge uses today, just
 externalised.
 """
 
+from .activity_forwarder import ActivityForwarder
 from .dance_reflector import DanceReflector
 from .face_greeter import FaceGreeter
 from .face_identified_refresher import FaceIdentifiedRefresher
@@ -29,6 +30,7 @@ from .sound_turner import SoundTurner
 from .wake_word_turner import WakeWordTurner
 
 __all__ = [
+    "ActivityForwarder",
     "DanceReflector",
     "FaceGreeter",
     "FaceIdentifiedRefresher",

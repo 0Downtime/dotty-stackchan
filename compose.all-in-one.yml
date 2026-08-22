@@ -79,6 +79,8 @@ services:
       # dotty-behaviour, dotty-pi) must carry the same value in its own
       # .env. See .env.example.
       - DOTTY_ADMIN_TOKEN=${DOTTY_ADMIN_TOKEN:-}
+      - DOTTY_ACTIVITY_ENABLED=${DOTTY_ACTIVITY_ENABLED:-false}
+      - DOTTY_ACTIVITY_URL=http://<XIAOZHI_HOST>:8081/admin/activity
     ports:
       # 8000: WebSocket — StackChan connects here
       - "8000:8000"
@@ -111,6 +113,8 @@ services:
       # DOTTY DeviceCommand seam: MCP request ids + envelope + per-conn
       # serialized sends, shared by http_server.py + receiveAudioHandle.py
       - ./custom-providers/xiaozhi-patches/device_command.py:/opt/xiaozhi-esp32-server/core/utils/device_command.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_telemetry.py:/opt/xiaozhi-esp32-server/core/utils/activity_telemetry.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_tts.py:/opt/xiaozhi-esp32-server/core/utils/activity_tts.py:ro
       - ./songs:/opt/xiaozhi-esp32-server/config/assets/songs:ro
       # DOTTY portal + admin routes + active-connection registry
       - ./custom-providers/xiaozhi-patches/portal_bridge.py:/opt/xiaozhi-esp32-server/core/portal_bridge.py:ro

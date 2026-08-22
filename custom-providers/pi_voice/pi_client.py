@@ -208,7 +208,12 @@ class PiClient:
                 return
         raise PiClientError("new_session timed out waiting for response")
 
-    def iter_turn_text(self, prompt: str) -> Iterator[str]:
+    def iter_turn_text(
+        self,
+        prompt: str,
+        *,
+        event_callback: Callable[[dict], None] | None = None,
+    ) -> Iterator[str]:
         """Send a `prompt` command and yield user-visible text deltas
         until `agent_end`. Thinking deltas and any other event types
         are silently dropped — the caller's only job is to forward what
@@ -243,6 +248,8 @@ class PiClient:
                         f"pi rejected prompt: {frame.get('error', 'unknown')}"
                     )
                 saw_accept = True
+                if event_callback:
+                    event_callback({"type": "model_started", "ts": time.monotonic()})
                 continue
 
             if ftype == "message_update":
@@ -251,6 +258,8 @@ class PiClient:
                     if ame.get("type") == "text_delta":
                         delta = ame.get("delta")
                         if isinstance(delta, str) and delta:
+                            if event_callback:
+                                event_callback({"type": "text_delta", "ts": time.monotonic()})
                             yield delta
                     elif ame.get("type") == "toolcall_end":
                         tool_call = ame.get("toolCall")
@@ -262,6 +271,27 @@ class PiClient:
                             )
                 # thinking_delta, thinking_start, thinking_end and any
                 # other message_update sub-types are filtered out here.
+                continue
+
+            if ftype == "tool_execution_start":
+                if event_callback:
+                    event_callback({
+                        "type": "tool_started",
+                        "ts": time.monotonic(),
+                        "tool_call_id": str(frame.get("toolCallId") or "")[:96],
+                        "tool_name": str(frame.get("toolName") or "tool")[:80],
+                    })
+                continue
+
+            if ftype == "tool_execution_end":
+                if event_callback:
+                    event_callback({
+                        "type": "tool_finished",
+                        "ts": time.monotonic(),
+                        "tool_call_id": str(frame.get("toolCallId") or "")[:96],
+                        "tool_name": str(frame.get("toolName") or "tool")[:80],
+                        "tool_ok": not bool(frame.get("isError")),
+                    })
                 continue
 
             if ftype == "agent_end":

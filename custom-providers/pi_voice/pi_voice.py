@@ -35,11 +35,18 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import unicodedata
 from pathlib import Path
 from typing import Iterator
 
 from .pi_client import PiClient, PiClientError, make_default_pi_client
+
+try:
+    from core.utils.activity_telemetry import emit_turn as _emit_activity_turn  # type: ignore
+except ImportError:  # pragma: no cover - workstation unit tests
+    def _emit_activity_turn(*args, **kwargs):
+        return False
 
 
 try:
@@ -112,6 +119,31 @@ def _last_user_text(dialogue: list[dict]) -> str:
         if msg.get("role") == "user":
             return _normalise_user_content(msg.get("content"))
     return ""
+
+
+def _last_user_turn(dialogue: list[dict]) -> tuple[str, str | None]:
+    """Return model-visible text plus private correlation metadata."""
+    for msg in reversed(dialogue):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        decoded = content
+        if isinstance(content, str):
+            stripped = content.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                try:
+                    decoded = json.loads(stripped)
+                except json.JSONDecodeError:
+                    decoded = content
+        if isinstance(decoded, dict):
+            text = decoded.get("content")
+            turn_id = decoded.get("_dotty_turn_id")
+            return (
+                text if isinstance(text, str) else str(content or ""),
+                str(turn_id)[:96] if turn_id else None,
+            )
+        return _normalise_user_content(content), None
+    return "", None
 
 
 def _normalise_user_content(content: object) -> str:
@@ -225,7 +257,7 @@ class LLMProvider(LLMProviderBase):
     # Each yielded string becomes a TTS chunk.
     def response(self, session_id, dialogue, **kwargs) -> Iterator[str]:
         self._kid_mode = _read_kid_mode()
-        user_text = _last_user_text(dialogue)
+        user_text, turn_id = _last_user_turn(dialogue)
         if not user_text:
             yield f"{FALLBACK_EMOJI} (empty turn)"
             return
@@ -240,6 +272,46 @@ class LLMProvider(LLMProviderBase):
                 logger.exception("PiVoiceLLM: new_session failed, continuing")
         self._first_turn = False
 
+        model_started_at = time.monotonic()
+        first_text_seen = False
+        tool_started: dict[str, float] = {}
+
+        def on_rpc_event(event: dict) -> None:
+            nonlocal model_started_at, first_text_seen
+            event_type = event.get("type")
+            if event_type == "model_started":
+                model_started_at = float(event.get("ts") or time.monotonic())
+                _emit_activity_turn(
+                    "model_started", turn_id, source="pi",
+                    session_id=session_id,
+                )
+            elif event_type == "text_delta" and not first_text_seen:
+                first_text_seen = True
+                elapsed = (float(event.get("ts") or time.monotonic()) - model_started_at) * 1000.0
+                _emit_activity_turn(
+                    "first_text", turn_id, source="pi",
+                    session_id=session_id, model_first_text_ms=max(0.0, elapsed),
+                )
+            elif event_type == "tool_started":
+                tool_id = str(event.get("tool_call_id") or "")
+                tool_started[tool_id] = float(event.get("ts") or time.monotonic())
+                _emit_activity_turn(
+                    "tool_started", turn_id, source="pi",
+                    session_id=session_id, tool_call_id=tool_id,
+                    tool_name=event.get("tool_name") or "tool",
+                )
+            elif event_type == "tool_finished":
+                tool_id = str(event.get("tool_call_id") or "")
+                ended = float(event.get("ts") or time.monotonic())
+                duration = max(0.0, (ended - tool_started.pop(tool_id, ended)) * 1000.0)
+                _emit_activity_turn(
+                    "tool_finished", turn_id, source="pi",
+                    session_id=session_id, tool_call_id=tool_id,
+                    tool_name=event.get("tool_name") or "tool",
+                    tool_ok=bool(event.get("tool_ok", True)),
+                    tool_duration_ms=duration,
+                )
+
         try:
             # #157: kid-mode blocked-content filter on TTS-bound output.
             # Full-turn buffered — the filter drains the pi RPC stream through
@@ -247,17 +319,37 @@ class LLMProvider(LLMProviderBase):
             # Emoji enforcement precedes filtering, matching OpenAICompat: in
             # kid mode the filter still makes one atomic whole-turn decision;
             # outside it, chunks stream after the first meaningful one.
+            spoken: list[str] = []
             for chunk in filter_tts_stream(
-                _enforce_leading_emoji(self._client.iter_turn_text(prompt)),
+                _enforce_leading_emoji(
+                    self._client.iter_turn_text(prompt, event_callback=on_rpc_event)
+                ),
                 self._kid_mode,
                 on_hit=self._on_filter_hit,
             ):
+                spoken.append(chunk)
                 yield chunk
+            response_text = "".join(spoken).strip()
+            emoji = next(
+                (candidate for candidate in ALLOWED_EMOJIS
+                 if response_text.startswith(candidate)),
+                "",
+            )
+            _emit_activity_turn(
+                "response_ready", turn_id, source="pi",
+                session_id=session_id, response_text=response_text,
+                emoji_used=emoji,
+            )
         except PiClientError as exc:
             logger.error("PiVoiceLLM turn failed: %s", exc)
             for line in self._client.recent_stderr()[-5:]:
                 logger.error("  pi.stderr: %s", line)
-            yield f"{FALLBACK_EMOJI} (brain offline — try again in a moment)"
+            fallback = f"{FALLBACK_EMOJI} (brain offline — try again in a moment)"
+            _emit_activity_turn(
+                "failed", turn_id, source="pi", session_id=session_id,
+                error=str(exc), response_text=fallback,
+            )
+            yield fallback
 
     def _on_filter_hit(self, tier: str, match) -> None:
         # Local logging only — the Prometheus counter / safety ring live in

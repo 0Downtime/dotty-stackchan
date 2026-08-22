@@ -44,6 +44,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # HTTP server
 HOST: str = os.environ.get("DOTTY_BEHAVIOUR_HOST", "0.0.0.0")
 PORT: int = _env_int("DOTTY_BEHAVIOUR_PORT", 8090)
@@ -53,6 +60,15 @@ PORT: int = _env_int("DOTTY_BEHAVIOUR_PORT", 8090)
 # the same way bridge.py does today.
 XIAOZHI_HOST: str = os.environ.get("XIAOZHI_HOST", "")
 XIAOZHI_HTTP_PORT: int = _env_int("XIAOZHI_OTA_PORT", 8003)
+
+# Unified dashboard timeline. This is opt-in and remains best-effort: the
+# forwarder has its own perception subscription and performs HTTP off-loop.
+ACTIVITY_ENABLED: bool = _env_bool("DOTTY_ACTIVITY_ENABLED", False)
+ACTIVITY_URL: str = os.environ.get(
+    "DOTTY_ACTIVITY_URL", "http://127.0.0.1:8081/admin/activity"
+)
+ACTIVITY_TOKEN: str = os.environ.get("DOTTY_ADMIN_TOKEN", "")
+ACTIVITY_TIMEOUT_SEC: float = _env_float("DOTTY_ACTIVITY_TIMEOUT_SEC", 0.75)
 
 # Outbound: llama-swap for narrative LLM (dreams, dance reflections,
 # scene synthesis). Mirrors bridge.py's NARRATIVE_LLM_URL.
