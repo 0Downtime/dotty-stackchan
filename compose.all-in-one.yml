@@ -73,12 +73,28 @@ services:
       # the firmware pips desync from the dashboard on every reconnect.
       - DOTTY_KID_MODE_STATE=/var/lib/dotty-bridge/state/kid-mode
       - DOTTY_SMART_MODE_STATE=/var/lib/dotty-bridge/state/smart-mode
+      - DOTTY_FACE_BUNDLE_STATE=/var/lib/dotty-bridge/state/face-bundles.json
       # Shared admin-API secret (X-Admin-Token). Read from ./.env — `make
       # setup` generates it. Unset/empty = permissive (admin routes open);
       # set = this server enforces it AND every caller (bridge,
       # dotty-behaviour, dotty-pi) must carry the same value in its own
       # .env. See .env.example.
       - DOTTY_ADMIN_TOKEN=${DOTTY_ADMIN_TOKEN:-}
+      # Experimental direct speech-to-speech route. Disabled by default and
+      # always bypassed while the shared Kid Mode toggle is active.
+      - DOTTY_REALTIME_ENABLED=${DOTTY_REALTIME_ENABLED:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
+      - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
+      - DOTTY_REALTIME_NAME=${DOTTY_REALTIME_NAME:-StackChan}
+      - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
+      - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
+      - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
+      - DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS=${DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS:-8}
+      - DOTTY_REALTIME_CODEX_WEB_ENABLED=${DOTTY_REALTIME_CODEX_WEB_ENABLED:-false}
+      - DOTTY_CODEX_BROKER_URL=${DOTTY_CODEX_BROKER_URL:-http://codex-web-broker:8092/search}
+      - DOTTY_CODEX_BROKER_TOKEN=${DOTTY_CODEX_BROKER_TOKEN:-}
+      - DOTTY_CODEX_TIMEOUT_SECONDS=${DOTTY_CODEX_TIMEOUT_SECONDS:-60}
     ports:
       # 8000: WebSocket — StackChan connects here
       - "8000:8000"
@@ -90,6 +106,7 @@ services:
       - ./tmp:/opt/xiaozhi-esp32-server/tmp
       - ./custom-providers/openai_compat:/opt/xiaozhi-esp32-server/core/providers/llm/openai_compat
       - ./custom-providers/pi_voice:/opt/xiaozhi-esp32-server/core/providers/llm/pi_voice
+      - ./custom-providers/openai_realtime:/opt/xiaozhi-esp32-server/core/providers/realtime:ro
       # PiVoiceLLM (the default LLM) shells out to `docker exec -i dotty-pi pi`,
       # so this container needs the docker CLI binary AND the host docker socket.
       # WARNING: mounting /var/run/docker.sock gives this container effective
@@ -111,6 +128,7 @@ services:
       # DOTTY DeviceCommand seam: MCP request ids + envelope + per-conn
       # serialized sends, shared by http_server.py + receiveAudioHandle.py
       - ./custom-providers/xiaozhi-patches/device_command.py:/opt/xiaozhi-esp32-server/core/utils/device_command.py:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
       - ./songs:/opt/xiaozhi-esp32-server/config/assets/songs:ro
       # DOTTY portal + admin routes + active-connection registry
       - ./custom-providers/xiaozhi-patches/portal_bridge.py:/opt/xiaozhi-esp32-server/core/portal_bridge.py:ro
@@ -129,3 +147,32 @@ services:
       # owns writes). Host path MUST match the bridge container's state mount.
       # Override DOTTY_STATE_DIR if your bridge writes elsewhere.
       - ${DOTTY_STATE_DIR:-/mnt/user/appdata/dotty-bridge/state}:/var/lib/dotty-bridge/state:ro
+
+  # Optional private Internet-research handoff. Start with
+  # `docker compose --profile codex-web up -d codex-web-broker`, authenticate
+  # its named volume once, then enable DOTTY_REALTIME_CODEX_WEB_ENABLED.
+  codex-web-broker:
+    profiles: ["codex-web"]
+    build:
+      context: ./codex-web-broker
+    image: dotty-codex-web-broker:local
+    container_name: dotty-codex-web-broker
+    restart: unless-stopped
+    environment:
+      - DOTTY_CODEX_BROKER_TOKEN=${DOTTY_CODEX_BROKER_TOKEN:-}
+      - DOTTY_CODEX_TIMEOUT_MS=${DOTTY_CODEX_TIMEOUT_MS:-60000}
+    expose:
+      - "8092"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+      - /workspace:rw,noexec,nosuid,nodev,size=4m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - codex-web-auth:/home/node/.codex
+
+volumes:
+  codex-web-auth:

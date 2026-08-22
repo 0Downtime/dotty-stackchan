@@ -29,6 +29,20 @@ KID_MODE = os.environ.get("DOTTY_KID_MODE", "true").lower() in ("1", "true", "ye
 _TURN_SUFFIX = build_turn_suffix(KID_MODE)
 
 
+def _optional_bool(value, name):
+    """Parse an optional boolean without silently accepting typos."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 def _load_persona(path):
     """Read a persona markdown file and return its contents as a string."""
     if not path:
@@ -58,18 +72,40 @@ class LLMProvider(LLMProviderBase):
     """
 
     def __init__(self, config):
-        self.base_url = (config.get("url") or "").rstrip("/")
+        self.base_url = (
+            os.environ.get("DOTTY_INFERENCE_URL") or config.get("url") or ""
+        ).rstrip("/")
         if not self.base_url:
             raise ValueError(
                 "OpenAICompat requires 'url' (e.g. https://api.openai.com/v1)"
             )
-        self.api_key = config.get("api_key") or ""
-        self.model = config.get("model") or ""
+        self.api_key = (
+            os.environ.get("DOTTY_INFERENCE_API_KEY")
+            or config.get("api_key")
+            or ""
+        )
+        self.model = os.environ.get("DOTTY_VOICE_MODEL") or config.get("model") or ""
         if not self.model:
             raise ValueError("OpenAICompat requires 'model'")
         self.max_tokens = int(config.get("max_tokens", 256))
         self.temperature = float(config.get("temperature", 0.7))
         self.timeout = float(config.get("timeout", 60))
+        # Qwen-family servers such as oMLX accept this chat-template option.
+        # Keep it optional so strictly OpenAI-compatible backends that reject
+        # unknown request fields continue to work.  Voice deployments using a
+        # reasoning model should explicitly set this to false: reasoning text
+        # must never be streamed into TTS.
+        enable_thinking = os.environ.get("DOTTY_VOICE_ENABLE_THINKING")
+        if enable_thinking is None:
+            enable_thinking = config.get("enable_thinking")
+        self.enable_thinking = _optional_bool(
+            enable_thinking, "DOTTY_VOICE_ENABLE_THINKING/enable_thinking"
+        )
+        self.offline_reply = (
+            os.environ.get("DOTTY_OFFLINE_REPLY")
+            or config.get("offline_reply")
+            or "My local brain is unavailable right now."
+        ).strip()
 
         # Load persona from file, fall back to inline system_prompt, then to
         # empty string (the top-level .config.yaml prompt: block will still be
@@ -150,6 +186,10 @@ class LLMProvider(LLMProviderBase):
         pieces = [p.strip() for p in _SENTENCE_BOUNDARY.split(text)]
         return [p for p in pieces if p]
 
+    def _offline_message(self):
+        """Return the configured local-only failure response."""
+        return f"{FALLBACK_EMOJI} {self.offline_reply}"
+
     # ------------------------------------------------------------------
     # streaming response (primary path)
     # ------------------------------------------------------------------
@@ -163,6 +203,10 @@ class LLMProvider(LLMProviderBase):
             "temperature": self.temperature,
             "stream": True,
         }
+        if self.enable_thinking is not None:
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": self.enable_thinking
+            }
         try:
             resp = requests.post(
                 self._completions_url(),
@@ -174,21 +218,21 @@ class LLMProvider(LLMProviderBase):
             resp.raise_for_status()
         except requests.exceptions.Timeout:
             logger.bind(tag=TAG).warning("OpenAICompat timeout on connect")
-            yield f"{FALLBACK_EMOJI} Sorry, I'm thinking too slowly right now."
+            yield self._offline_message()
             return
         except requests.exceptions.ConnectionError:
             logger.bind(tag=TAG).error(
                 f"OpenAICompat unreachable: {self._completions_url()}"
             )
-            yield f"{FALLBACK_EMOJI} My brain is offline. Check the LLM endpoint."
+            yield self._offline_message()
             return
         except requests.exceptions.HTTPError as exc:
             logger.bind(tag=TAG).error(f"OpenAICompat HTTP error: {exc}")
-            yield f"{FALLBACK_EMOJI} My brain returned an error."
+            yield self._offline_message()
             return
         except Exception:
             logger.bind(tag=TAG).exception("OpenAICompat request error")
-            yield f"{FALLBACK_EMOJI} Something went wrong, please try again."
+            yield self._offline_message()
             return
 
         # Accumulate full text so we can do emoji-prefix enforcement on the

@@ -57,9 +57,13 @@ XIAOZHI_HTTP_PORT: int = _env_int("XIAOZHI_OTA_PORT", 8003)
 # Outbound: llama-swap for narrative LLM (dreams, dance reflections,
 # scene synthesis). Mirrors bridge.py's NARRATIVE_LLM_URL.
 NARRATIVE_LLM_URL: str = os.environ.get(
-    "NARRATIVE_LLM_URL", "http://127.0.0.1:8080/v1"
+    "DOTTY_REASONING_URL",
+    os.environ.get("NARRATIVE_LLM_URL", "http://127.0.0.1:8080/v1"),
 )
-NARRATIVE_MODEL: str = os.environ.get("NARRATIVE_MODEL", "qwen3.6:27b-think")
+NARRATIVE_MODEL: str = os.environ.get(
+    "DOTTY_REASONING_MODEL",
+    os.environ.get("NARRATIVE_MODEL", "qwen3.6:27b-think"),
+)
 NARRATIVE_TIMEOUT_SEC: float = _env_float("NARRATIVE_TIMEOUT_SEC", 90.0)
 
 # Filesystem roots — bind-mounted under /var/lib/dotty-behaviour/ in
@@ -182,9 +186,16 @@ VISION_TIMEOUT_SEC: float = _env_float("VISION_TIMEOUT", 15.0)
 # Optional split — point the VLM at a local model (e.g. Ollama
 # Qwen2.5-VL) while VISION_API_URL still serves the cloud-routed
 # narrative LLM. Defaults to the legacy VISION_* values.
-VLM_MODEL: str = os.environ.get("VLM_MODEL", VISION_MODEL)
-VLM_API_KEY: str = os.environ.get("VLM_API_KEY", VISION_API_KEY)
-VLM_API_URL: str = os.environ.get("VLM_API_URL", VISION_API_URL)
+VLM_MODEL: str = os.environ.get(
+    "DOTTY_VISION_MODEL", os.environ.get("VLM_MODEL", VISION_MODEL)
+)
+VLM_API_KEY: str = os.environ.get(
+    "DOTTY_VISION_API_KEY",
+    os.environ.get("VLM_API_KEY", VISION_API_KEY),
+)
+VLM_API_URL: str = os.environ.get(
+    "DOTTY_VISION_URL", os.environ.get("VLM_API_URL", VISION_API_URL)
+)
 
 # How long an idle-photo room_view cache entry is fresh enough that
 # subsequent triggers within the window skip the VLM call.

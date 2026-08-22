@@ -21,10 +21,10 @@ selected_module:
   Intent: nointent
 
 # EDIT: tailor this persona prompt to your own context.
-# Replace "Dotty" with whatever you want the robot to call itself.
-# The hardware is a StackChan; the persona can be anything.
+# Keep StackChan for the current self-reference. This remains customizable for
+# deployments that intentionally choose a different persona later.
 prompt: |
-  You are Dotty, a small desktop robot assistant built on StackChan hardware.
+  You are StackChan, a small desktop robot assistant built on StackChan hardware.
   You speak through a small speaker with a cartoon face that shows your expression.
   Stay cheerful, curious, and helpful.
 
@@ -136,6 +136,13 @@ LLM:
     url: <OPENAI_COMPAT_URL>
     api_key: <OPENAI_COMPAT_API_KEY>
     model: <OPENAI_COMPAT_MODEL>
+    # Optional Qwen/oMLX chat-template control. Set false on voice paths so
+    # hidden reasoning is not streamed into TTS. Omit for generic backends
+    # that reject chat_template_kwargs.
+    # enable_thinking: false
+    # Optional spoken response when the local inference service is unavailable.
+    # DOTTY_OFFLINE_REPLY overrides this value at runtime.
+    offline_reply: My local brain is unavailable right now.
     # Path to a persona markdown file loaded as the system prompt.
     # Relative paths resolve from the xiaozhi-server working directory
     # inside the container (/opt/xiaozhi-esp32-server).

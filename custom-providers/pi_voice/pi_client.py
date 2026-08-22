@@ -46,18 +46,23 @@ from typing import Callable, Iterable, Iterator, List, Optional
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_PI_FLAGS = (
-    "--mode", "rpc",
-    "--provider", "ollama",
-    "--model", "qwen3.5:4b",
-    "--no-session",
-    "--no-context-files",
-    "--offline",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--thinking", "off",
-)
+def _default_pi_flags() -> tuple[str, ...]:
+    """Build agent flags from the deployment environment contract."""
+    provider = os.environ.get("DOTTY_PI_PROVIDER", "ollama")
+    model = os.environ.get("DOTTY_PI_MODEL", "qwen3.5:4b")
+    return (
+        "--mode", "rpc",
+        "--provider", provider,
+        "--model", model,
+        "--no-builtin-tools",
+        "--no-session",
+        "--no-context-files",
+        "--offline",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--thinking", "off",
+    )
 
 
 def default_subprocess_factory(
@@ -204,7 +209,12 @@ class PiClient:
             if (
                 frame.get("type") == "response"
                 and frame.get("command") == "new_session"
+                and frame.get("id") == req_id
             ):
+                if not frame.get("success", False):
+                    raise PiClientError(
+                        f"pi rejected new_session: {frame.get('error', 'unknown')}"
+                    )
                 return
         raise PiClientError("new_session timed out waiting for response")
 
@@ -367,7 +377,7 @@ class PiClient:
 # PiClient ready to be used by xiaozhi-server.
 def make_default_pi_client() -> PiClient:
     container = os.environ.get("DOTTY_PI_CONTAINER", "dotty-pi")
-    pi_args: list[str] = list(_DEFAULT_PI_FLAGS)
+    pi_args: list[str] = list(_default_pi_flags())
     extra = os.environ.get("DOTTY_PI_EXTRA_FLAGS", "").split()
     if extra:
         pi_args.extend(extra)

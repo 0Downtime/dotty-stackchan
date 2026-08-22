@@ -9,7 +9,7 @@ description: The pi agent runtime (dotty-pi container), the model matrix, and th
 
 - The "brain" is the **`dotty-pi` Docker container** running the pi coding agent with the `dotty-pi-ext` extension.
 - **`PiVoiceLLM`** (the default xiaozhi LLM provider) translates each voice turn into a pi RPC request via `docker exec -i dotty-pi pi --mode rpc`. TTS-bound text streams back to xiaozhi-server; tool dispatch happens entirely inside the container.
-- The `dotty-pi-ext` extension exposes **seven voice tools** to the agent loop: `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`.
+- The `dotty-pi-ext` extension exposes **eight voice tools** to the agent loop: `device_status`, `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`.
 - **Which LLM runs which turn:** the pi outer loop targets `qwen3.5:4b` (local llama-swap, ~500 ms warm); `think_hard` escalates directly to `qwen3.6:27b-think` (co-resident on llama-swap). **Smart-mode does NOT swap the backend model on the live `PiVoiceLLM` path** — it flips ambient/behaviour only; the inner-loop model-swap is v2 scope and not wired. (Instant in-process model-swap existed only on the now-removed `Tier1Slim` provider.)
 - One documented alternate voice provider exists: **`OpenAICompat`** (points straight at any OpenAI-compatible endpoint; stateless, no voice tools). See [llm-backends.md](./llm-backends.md).
 
@@ -55,7 +55,7 @@ Appdata layout on the Docker host:
     └── dotty-pi-ext/        # voice-tool extension
 ```
 
-### dotty-pi-ext — the seven voice tools
+### dotty-pi-ext — the eight voice tools
 
 `dotty-pi-ext` is the pi extension that exposes Dotty's voice tools to the agent loop. Installed inside the container at `/root/.pi/extensions/dotty-pi-ext/`.
 

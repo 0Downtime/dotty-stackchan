@@ -10,8 +10,9 @@ user-visible text chunks back to TTS, done.
 
 Per #36 Step-5 contract:
   - PiVoiceLLM owns ONE PiClient — long-lived across all turns.
-  - Between turns we issue `new_session` to reset pi's working state
-    without re-spawning the process.
+  - Turns with the same xiaozhi `session_id` share pi's working state.
+    When the xiaozhi session changes, we issue `new_session` without
+    re-spawning the process.
   - Thinking deltas + extension UI requests are filtered inside
     PiClient (see pi_client.py) — by the time text reaches `response()`
     only TTS-bound chunks remain.
@@ -35,7 +36,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import threading
+import time
 import unicodedata
+import urllib.request
 from pathlib import Path
 from typing import Iterator
 
@@ -87,6 +92,8 @@ except ImportError:  # pragma: no cover — dev workstation fallback
 TAG = __name__
 logger = setup_logging()
 
+_DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 120.0
+
 
 def _read_kid_mode() -> bool:
     """Read the shared runtime toggle, falling back to startup config."""
@@ -102,6 +109,26 @@ def _read_kid_mode() -> bool:
     except OSError:
         pass
     return os.environ.get("DOTTY_KID_MODE", "true").lower() in ("1", "true", "yes")
+
+
+def _session_idle_timeout_seconds(config: dict) -> float:
+    """Return the fallback boundary used when xiaozhi omits a session ID.
+
+    Xiaozhi's voice connection defaults to a 120-second no-speech timeout.
+    Matching that value keeps ID-less integrations useful without allowing
+    their working context to survive indefinitely.
+    """
+    raw = config.get(
+        "session_idle_timeout_seconds",
+        os.environ.get(
+            "DOTTY_PI_SESSION_IDLE_TIMEOUT_SECONDS",
+            _DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
+        ),
+    )
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS
 
 
 def _last_user_text(dialogue: list[dict]) -> str:
@@ -139,23 +166,105 @@ def _normalise_user_content(content: object) -> str:
 
 
 _VOICE_TOOL_ROUTING = (
-    "\n\nVOICE TOOL ROUTING: Decide whether to use a registered tool before "
-    "composing the spoken reply. Use the matching tool when the user asks you "
-    "to remember or recall, play a song, look or take a photo, or solve a "
-    "question that needs careful reasoning. Call it first and use its result. "
-    "Never claim an action succeeded unless its tool succeeded. The reply "
-    "constraints below apply only to final spoken text, not to tool calls."
+    "\n\nVOICE TOOL ROUTING: Before speaking, decide whether the answer depends "
+    "on a registered Dotty tool. Questions can require tools too. Use "
+    "device_status for current volume, battery, screen, or network status; "
+    "memory_lookup or recall_person for facts learned earlier; remember or "
+    "remember_person when explicitly asked to retain a durable fact; play_song "
+    "for requested music; take_photo for the current room or camera view; and "
+    "think_hard for precise math, technical, or factual reasoning. Call the "
+    "matching tool first and base the spoken answer on its result. For greetings, "
+    "opinions, simple conversation, or general knowledge you already know, answer "
+    "without a tool. Never substitute file, shell, or coding tools. If no "
+    "registered Dotty tool can perform the request, say so briefly; never pretend "
+    "an action or lookup succeeded. The reply constraints below apply only to "
+    "final spoken text, not to tool calls."
 )
 
 
-def _wrap_with_sandwich(user_text: str, kid_mode: bool) -> str:
+_DEVICE_STATUS_SUBJECT = re.compile(
+    r"\b(volume|speaker|battery|charging|brightness|screen|theme|"
+    r"network|wi-?fi|signal)\b",
+    re.IGNORECASE,
+)
+_DEVICE_STATUS_CURRENT = re.compile(
+    r"\b(current|currently|right now|status|level|check|what(?:'s| is)|"
+    r"how (?:much|full|strong|bright|loud))\b",
+    re.IGNORECASE,
+)
+
+
+def _needs_live_device_status(user_text: str) -> bool:
+    """Recognize unambiguous questions about the robot's current state.
+
+    A small local model is allowed to choose tools for ambiguous requests, but
+    these high-confidence phrases are routed deterministically so it cannot
+    claim to have checked the robot without actually doing so.
+    """
+    return bool(
+        _DEVICE_STATUS_SUBJECT.search(user_text)
+        and _DEVICE_STATUS_CURRENT.search(user_text)
+    )
+
+
+def _fetch_live_device_status(user_text: str) -> str:
+    """Fetch and minimize current firmware status for a status-bound turn."""
+    if not _needs_live_device_status(user_text):
+        return ""
+    token = os.environ.get("DOTTY_ADMIN_TOKEN", "").strip()
+    port = os.environ.get("XIAOZHI_HTTP_PORT", "8003").strip() or "8003"
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/xiaozhi/admin/device-status",
+        data=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "X-Admin-Token": token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        logger.warning("PiVoiceLLM: live device-status preflight failed: %s", exc)
+        return ""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    if not isinstance(status, dict):
+        return ""
+
+    lowered = user_text.lower()
+    selected: dict[str, object] = {}
+    if "volume" in lowered or "speaker" in lowered:
+        selected["audio_speaker"] = status.get("audio_speaker")
+    if "battery" in lowered or "charging" in lowered:
+        selected["battery"] = status.get("battery")
+    if any(word in lowered for word in ("screen", "brightness", "theme")):
+        selected["screen"] = status.get("screen")
+    if any(word in lowered for word in ("network", "wifi", "wi-fi", "signal")):
+        selected["network"] = status.get("network")
+    selected = {key: value for key, value in selected.items() if value is not None}
+    return json.dumps(selected or status, separators=(",", ":"))
+
+
+def _wrap_with_sandwich(
+    user_text: str,
+    kid_mode: bool,
+    live_device_status: str = "",
+) -> str:
     """Append the HARD CONSTRAINTS suffix to the user's text via the shared
     textUtils.build_turn_suffix contract — emoji-prefix
     rule, English-only, length caps, kid-mode topic filtering. Without
     this Dotty drifts into Chinese, multi-paragraph replies, and (in
     kid_mode) unsafe topics, since qwen3.5:4b's base behaviour doesn't
     encode any of those constraints."""
-    return user_text + _VOICE_TOOL_ROUTING + build_turn_suffix(kid_mode)
+    verified = ""
+    if live_device_status:
+        verified = (
+            "\n\nVERIFIED LIVE DEVICE STATUS: The runtime already called "
+            f"device_status and received {live_device_status}. Do not call it "
+            "again. State the exact relevant value in the spoken answer."
+        )
+    return user_text + verified + _VOICE_TOOL_ROUTING + build_turn_suffix(kid_mode)
 
 
 def _enforce_leading_emoji(chunks: Iterator[str]) -> Iterator[str]:
@@ -214,7 +323,17 @@ class LLMProvider(LLMProviderBase):
         # `client` is injected by tests; production passes None to get
         # the env-configured default.
         self._client: PiClient = client if client is not None else make_default_pi_client()
-        self._first_turn = True
+        # xiaozhi can invoke one provider from several priority/background
+        # threads (for example a room-view greeter while a voice turn starts).
+        # Pi RPC is a single ordered stream, so keep the complete
+        # new_session -> prompt -> agent_end transaction exclusive.  Locking
+        # only individual writes is insufficient: one caller can otherwise
+        # consume another caller's response frames.
+        self._turn_lock = threading.Lock()
+        self._active_session_id: str | None = None
+        self._last_turn_at: float | None = None
+        self._has_pi_context = False
+        self._session_idle_timeout = _session_idle_timeout_seconds(config)
         msg = f"PiVoiceLLM ready (container={self._container} kid_mode={self._kid_mode})"
         try:
             logger.bind(tag=TAG).info(msg)  # type: ignore[attr-defined]
@@ -224,21 +343,57 @@ class LLMProvider(LLMProviderBase):
     # xiaozhi-server's voice loop calls this as a sync generator.
     # Each yielded string becomes a TTS chunk.
     def response(self, session_id, dialogue, **kwargs) -> Iterator[str]:
+        with self._turn_lock:
+            yield from self._response_serialized(session_id, dialogue, **kwargs)
+
+    def _response_serialized(self, session_id, dialogue, **kwargs) -> Iterator[str]:
+        """Run one complete Pi RPC transaction while ``_turn_lock`` is held."""
         self._kid_mode = _read_kid_mode()
         user_text = _last_user_text(dialogue)
         if not user_text:
             yield f"{FALLBACK_EMOJI} (empty turn)"
             return
-        prompt = _wrap_with_sandwich(user_text, self._kid_mode)
+        live_device_status = _fetch_live_device_status(user_text)
+        prompt = _wrap_with_sandwich(
+            user_text,
+            self._kid_mode,
+            live_device_status=live_device_status,
+        )
 
-        # Reset pi state between voice turns. First turn skips this —
-        # the freshly-spawned process is already clean.
-        if not self._first_turn:
+        # Keep ordinary follow-up turns in the same pi conversation. A new
+        # xiaozhi audio-channel session is the authoritative boundary. If an
+        # integration omits the ID, fall back to xiaozhi's no-speech timeout.
+        normalized_session_id = str(session_id or "").strip() or None
+        now = time.monotonic()
+        reset_reason: str | None = None
+        if self._has_pi_context:
+            if normalized_session_id is not None:
+                if normalized_session_id != self._active_session_id:
+                    reset_reason = "xiaozhi session changed"
+            elif self._active_session_id is not None:
+                # Do not let an unscoped turn inherit a known session's context.
+                reset_reason = "xiaozhi session id missing"
+            elif (
+                self._last_turn_at is not None
+                and now - self._last_turn_at >= self._session_idle_timeout
+            ):
+                reset_reason = "id-less session idle timeout"
+
+        if reset_reason is not None:
             try:
                 self._client.new_session()
             except PiClientError:
-                logger.exception("PiVoiceLLM: new_session failed, continuing")
-        self._first_turn = False
+                logger.exception(
+                    f"PiVoiceLLM: new_session failed ({reset_reason}), refusing turn"
+                )
+                yield f"{FALLBACK_EMOJI} (brain offline — try again in a moment)"
+                return
+            else:
+                logger.info(f"PiVoiceLLM: reset pi context ({reset_reason})")
+
+        self._active_session_id = normalized_session_id
+        self._last_turn_at = now
+        self._has_pi_context = True
 
         try:
             # #157: kid-mode blocked-content filter on TTS-bound output.

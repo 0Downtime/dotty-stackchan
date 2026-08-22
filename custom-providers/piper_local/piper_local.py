@@ -1,5 +1,6 @@
 import os
 import queue
+import threading
 import traceback
 from math import gcd
 
@@ -15,6 +16,26 @@ from core.utils.tts import MarkdownCleaner
 
 TAG = __name__
 logger = setup_logging()
+
+
+# Piper owns a sizeable ONNX Runtime session.  xiaozhi creates a fresh TTS
+# provider for every device WebSocket, so loading the voice in each provider
+# permanently grows the process RSS when firmware reconnects.  Keep the model
+# process-wide while leaving queues, encoders, and connection state per
+# provider.  The lock also serializes the uncommon overlap between an old
+# connection winding down and its replacement starting synthesis.
+_VOICE_CACHE = {}
+_VOICE_CACHE_LOCK = threading.Lock()
+
+
+def _cached_voice(model_path, config_path):
+    key = (os.path.realpath(model_path), os.path.realpath(config_path))
+    with _VOICE_CACHE_LOCK:
+        cached = _VOICE_CACHE.get(key)
+        if cached is None:
+            cached = (PiperVoice.load(model_path, config_path), threading.RLock())
+            _VOICE_CACHE[key] = cached
+        return cached
 
 
 class TTSProvider(TTSProviderBase):
@@ -52,7 +73,7 @@ class TTSProvider(TTSProviderBase):
                 f"piper_local: config_path missing or not found: {config_path!r}"
             )
 
-        self.voice_obj = PiperVoice.load(model_path, config_path)
+        self.voice_obj, self._voice_lock = _cached_voice(model_path, config_path)
 
         self.opus_encoder = opus_encoder_utils.OpusEncoderUtils(
             sample_rate=24000, channels=1, frame_size_ms=60
@@ -146,9 +167,11 @@ class TTSProvider(TTSProviderBase):
             self.tts_audio_queue.put((SentenceType.FIRST, [], text))
 
             raw_pcm = bytearray()
-            for chunk in self.voice_obj.synthesize(text, syn_config=self.syn_config):
-                if chunk and chunk.audio_int16_bytes:
-                    raw_pcm.extend(chunk.audio_int16_bytes)
+            with self._voice_lock:
+                chunks = self.voice_obj.synthesize(text, syn_config=self.syn_config)
+                for chunk in chunks:
+                    if chunk and chunk.audio_int16_bytes:
+                        raw_pcm.extend(chunk.audio_int16_bytes)
 
             if not raw_pcm:
                 logger.bind(tag=TAG).warning(

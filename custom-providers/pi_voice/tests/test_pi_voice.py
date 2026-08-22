@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Iterator
@@ -102,6 +104,12 @@ class TestSandwichInjection(unittest.TestCase):
         self.assertLess(wrapped.index("VOICE TOOL ROUTING"), wrapped.index("HARD CONSTRAINTS"))
         self.assertIn("not to tool calls", wrapped)
 
+    def test_current_stackchan_identity_overrides_earlier_persona(self):
+        wrapped = _wrap_with_sandwich("What is your name?", False)
+        self.assertIn("Your name is StackChan", wrapped)
+        self.assertIn("Refer to yourself only as StackChan", wrapped)
+        self.assertIn("Do not call yourself Dotty", wrapped)
+
     def test_json_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": '{"content": "remember purple"}'}]
         self.assertEqual(_last_user_text(dialogue), "remember purple")
@@ -182,7 +190,7 @@ class TestEmptyTurn(unittest.TestCase):
 
 
 class TestNewSessionLifecycle(unittest.TestCase):
-    def test_first_turn_skips_new_session(self):
+    def test_same_xiaozhi_session_preserves_pi_context(self):
         os.environ["DOTTY_KID_MODE"] = "true"
         client = FakeClient()
         client.script_turn(["ok"])
@@ -191,7 +199,65 @@ class TestNewSessionLifecycle(unittest.TestCase):
         list(provider.response("s", [{"role": "user", "content": "a"}]))
         self.assertEqual(client.new_session_calls, 0, "no new_session on first turn")
         list(provider.response("s", [{"role": "user", "content": "b"}]))
-        self.assertEqual(client.new_session_calls, 1, "new_session on second turn")
+        self.assertEqual(client.new_session_calls, 0, "same session keeps context")
+
+    def test_new_xiaozhi_session_resets_pi_context(self):
+        os.environ["DOTTY_KID_MODE"] = "true"
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
+        list(provider.response("session-b", [{"role": "user", "content": "b"}]))
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_concurrent_responses_are_serialized_through_agent_end(self):
+        class OverlapDetectingClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self.active = 0
+                self.max_active = 0
+                self.first_started = threading.Event()
+                self.release_first = threading.Event()
+
+            def iter_turn_text(self, prompt: str) -> Iterator[str]:
+                self.prompts.append(prompt)
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                try:
+                    if len(self.prompts) == 1:
+                        self.first_started.set()
+                        self.release_first.wait(timeout=2)
+                    yield "😊 ok"
+                finally:
+                    self.active -= 1
+
+        os.environ["DOTTY_KID_MODE"] = "false"
+        client = OverlapDetectingClient()
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        outputs: list[list[str]] = []
+
+        def run(text: str) -> None:
+            outputs.append(list(provider.response(
+                "s", [{"role": "user", "content": text}],
+            )))
+
+        first = threading.Thread(target=run, args=("first",))
+        second = threading.Thread(target=run, args=("second",))
+        first.start()
+        self.assertTrue(client.first_started.wait(timeout=1))
+        second.start()
+        time.sleep(0.05)
+        self.assertEqual(len(client.prompts), 1, "second turn must wait")
+        client.release_first.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(client.max_active, 1)
+        self.assertEqual(len(outputs), 2)
+        self.assertEqual(client.new_session_calls, 0)
 
 
 class TestErrorFallback(unittest.TestCase):
@@ -234,9 +300,9 @@ class TestLeadingEmojiContract(unittest.TestCase):
         out = self._response(["❤️ Hello"])
         self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
 
-    def test_disallowed_single_codepoint_emoji_is_replaced(self):
+    def test_full_catalog_single_codepoint_emoji_is_retained(self):
         out = self._response(["😂 Hello"])
-        self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
+        self.assertEqual("".join(out), "😂 Hello")
 
     def test_empty_model_stream_gets_emoji_fallback(self):
         out = self._response([])
