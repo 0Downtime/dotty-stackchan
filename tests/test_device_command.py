@@ -148,6 +148,9 @@ class TestHttpServerWiring(unittest.TestCase):
             "config", "config.logger", "core", "core.api",
             "core.api.ota_handler", "core.api.vision_handler",
             "core.portal_bridge", "core.utils", "core.utils.device_command",
+            "core.providers", "core.providers.tools",
+            "core.providers.tools.device_mcp",
+            "core.providers.tools.device_mcp.mcp_handler",
         )
         missing = object()
         cls._saved = {k: sys.modules.get(k, missing) for k in stubbed}
@@ -167,6 +170,16 @@ class TestHttpServerWiring(unittest.TestCase):
         core_utils.device_command = dc
         sys.modules["core.utils"] = core_utils
         sys.modules["core.utils.device_command"] = dc
+        mcp_handler = types.ModuleType("core.providers.tools.device_mcp.mcp_handler")
+
+        async def call_mcp_tool(conn, client, tool_name, arguments, timeout=10):
+            conn.status_calls.append((client, tool_name, arguments, timeout))
+            return '{"audio_speaker":{"volume":70},"battery":{"level":88}}'
+
+        mcp_handler.call_mcp_tool = call_mcp_tool
+        for n in ("core.providers", "core.providers.tools", "core.providers.tools.device_mcp"):
+            sys.modules[n] = types.ModuleType(n)
+        sys.modules["core.providers.tools.device_mcp.mcp_handler"] = mcp_handler
 
         spec = _ilu.spec_from_file_location(
             "http_server_dc_under_test",
@@ -230,6 +243,29 @@ class TestHttpServerWiring(unittest.TestCase):
         got, err = self.mod._dotty_resolve_conn("")
         self.assertIsNone(got)
         self.assertEqual(err.status, 503)
+
+    def test_device_status_waits_for_correlated_firmware_reply(self):
+        async def go():
+            conn = _FakeConn()
+            conn.headers = {"device-id": "dev-status"}
+            conn.status_calls = []
+            conn.mcp_client = types.SimpleNamespace(
+                name_mapping={"self_get_device_status": "self.get_device_status"}
+            )
+            type(self).active["dev-status"] = conn
+
+            response = await self._server()._dotty_device_status(self._request({}))
+            payload = json.loads(response.text)
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["device_id"], "dev-status")
+            self.assertEqual(payload["status"]["audio_speaker"]["volume"], 70)
+            self.assertEqual(
+                conn.status_calls[0][1:],
+                ("self_get_device_status", {}, 5),
+            )
+
+        asyncio.run(go())
 
     def test_no_ms_truncated_ids_left_anywhere(self):
         # The collision-prone id pattern must not reappear in either

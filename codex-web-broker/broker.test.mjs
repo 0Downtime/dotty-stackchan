@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -6,6 +9,7 @@ import {
   buildChildEnv,
   buildCodexArgs,
   createBrokerServer,
+  ensureCodexConfig,
 } from "./broker.mjs";
 
 test("authorization requires the exact bearer token", () => {
@@ -36,8 +40,24 @@ test("Codex invocation is ephemeral, strict, and rooted in the empty workspace",
   assert.ok(args.includes("--strict-config"));
   assert.ok(args.includes("--ignore-rules"));
   assert.equal(args[args.indexOf("--cd") + 1], "/workspace");
-  assert.match(args.at(-1), /use live web search/i);
+  assert.match(args.at(-1), /exactly one live web search/i);
+  assert.match(args.at(-1), /do not run a second search/i);
+  assert.match(args.at(-1), /under 120 words/i);
+  assert.match(args.at(-1), /at most two source titles and URLs/i);
   assert.match(args.at(-1), /What changed today\?/);
+});
+
+test("Codex configuration pins Luna at high reasoning effort", async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), "dotty-codex-test-"));
+  try {
+    await ensureCodexConfig(codexHome);
+    const config = await readFile(join(codexHome, "config.toml"), "utf8");
+    assert.match(config, /^model = "gpt-5\.6-luna"$/m);
+    assert.match(config, /^model_reasoning_effort = "high"$/m);
+    assert.match(config, /^web_search = "live"$/m);
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
 });
 
 test("HTTP interface is authenticated and only returns broker results", async (context) => {

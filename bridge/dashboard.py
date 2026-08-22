@@ -11,6 +11,7 @@ service. Cards for unset hosts render as "unknown".
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -40,6 +41,8 @@ _state: dict[str, Any] = {
     "kid_mode_setter": None,
     "smart_mode_getter": None,
     "smart_mode_setter": None,
+    "tts_provider_getter": None,
+    "tts_provider_setter": None,
     "state_getter": None,
     "state_setter": None,
     "inject_to_device": None,
@@ -63,6 +66,7 @@ def configure(*, send_message: Any = None, vision_cache_getter: Any = None,
               scene_synthesis_cache_getter: Any = None,
               kid_mode_getter: Any = None, kid_mode_setter: Any = None,
               smart_mode_getter: Any = None, smart_mode_setter: Any = None,
+              tts_provider_getter: Any = None, tts_provider_setter: Any = None,
               state_getter: Any = None, state_setter: Any = None,
               inject_to_device: Any = None, abort_device: Any = None,
               subscribe_events: Any = None,
@@ -93,6 +97,10 @@ def configure(*, send_message: Any = None, vision_cache_getter: Any = None,
         _state["smart_mode_getter"] = smart_mode_getter
     if smart_mode_setter is not None:
         _state["smart_mode_setter"] = smart_mode_setter
+    if tts_provider_getter is not None:
+        _state["tts_provider_getter"] = tts_provider_getter
+    if tts_provider_setter is not None:
+        _state["tts_provider_setter"] = tts_provider_setter
     if state_getter is not None:
         _state["state_getter"] = state_getter
     if state_setter is not None:
@@ -1171,6 +1179,74 @@ async def smart_mode_partial(request: Request) -> Any:
     )
 
 
+async def _tts_provider_snapshot() -> dict[str, Any]:
+    getter = _state.get("tts_provider_getter")
+    if getter is None:
+        return {"ok": False, "error": "TTS provider control is unavailable"}
+    try:
+        result = getter()
+        if inspect.isawaitable(result):
+            result = await result
+        return result if isinstance(result, dict) else {"ok": False, "error": "invalid provider response"}
+    except Exception as exc:
+        log.warning("tts_provider_getter failed", exc_info=True)
+        return {"ok": False, "error": str(exc)}
+
+
+@router.get("/tts-provider", response_class=HTMLResponse, include_in_schema=False)
+async def tts_provider_partial(request: Request) -> Any:
+    result = await _tts_provider_snapshot()
+    return templates.TemplateResponse(
+        request,
+        "tts_provider.html",
+        {
+            "available": _state.get("tts_provider_setter") is not None,
+            "ok": bool(result.get("ok")),
+            "provider": result.get("provider", "local_piper"),
+            "openai_configured": bool(result.get("openai_configured")),
+            "error": result.get("error"),
+        },
+    )
+
+
+@router.post("/actions/tts-provider", response_class=HTMLResponse, include_in_schema=False)
+async def tts_provider_set(request: Request, provider: str = Form(...)) -> Any:
+    provider = (provider or "").strip().lower()
+    if provider not in {"local_piper", "openai_tts"}:
+        return templates.TemplateResponse(
+            request,
+            "tts_provider_result.html",
+            {"ok": False, "error": "Unknown TTS provider."},
+        )
+    setter = _state.get("tts_provider_setter")
+    if setter is None:
+        raise HTTPException(503, "tts_provider_setter not configured")
+    try:
+        result = setter(provider)
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        log.exception("tts provider setter failed")
+        result = {"ok": False, "error": str(exc)}
+    if not isinstance(result, dict):
+        result = {"ok": bool(result)}
+    if not result.get("ok"):
+        return templates.TemplateResponse(
+            request,
+            "tts_provider_result.html",
+            {"ok": False, "error": result.get("error") or "TTS provider switch failed."},
+        )
+    return templates.TemplateResponse(
+        request,
+        "tts_provider_result.html",
+        {
+            "ok": True,
+            "provider": provider,
+            "restart_scheduled": bool(result.get("restart_scheduled")),
+        },
+    )
+
+
 def _pick_perception_device_id() -> str | None:
     """Single-device deployment helper — picks the most relevant device id
     to feed into the Perception card builder. Priority:
@@ -1858,11 +1934,12 @@ async def host_detail(request: Request, slug: str) -> Any:
         st_getter = _state.get("state_getter")
         firmware_state = (st_getter() if st_getter else None) or "idle"
         voice_active = firmware_state in ("talk", "story_time")
-        # TTS / ASR provider names — these live in the xiaozhi-server
-        # YAML on Unraid; the bridge does not currently poll for them.
-        # TODO: when xiaozhi exposes /xiaozhi/admin/config (or similar),
-        # query it instead of hardcoding. For now we surface the known
-        # deployment values so the modal isn't blank.
+        tts_result = await _tts_provider_snapshot()
+        tts_provider = tts_result.get("provider")
+        tts_label = {
+            "local_piper": "LocalPiper",
+            "openai_tts": "OpenAI TTS",
+        }.get(tts_provider, "unknown")
         facts = [
             ("Host",     XIAOZHI_HOST or "(unset)"),
             ("OTA :%d" % XIAOZHI_OTA_PORT, "reachable" if ota_ok else "unreachable"),
@@ -1870,7 +1947,7 @@ async def host_detail(request: Request, slug: str) -> Any:
             ("Devices connected", "—" if n is None else f"{n}"),
             ("Voice channel", "active" if voice_active else "idle"),
             ("Current LLM", current_llm),
-            ("TTS provider", "LocalPiper"),
+            ("TTS provider", tts_label),
             ("ASR provider", "SenseVoice"),
             # TODO: surface today's xiaozhi error count once the bridge
             # tails the container log or xiaozhi exposes a metric.
@@ -2144,5 +2221,3 @@ async def events_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
-
-

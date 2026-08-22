@@ -367,6 +367,7 @@ class TestDefaultFlags(unittest.TestCase):
             flags = _default_pi_flags()
         self.assertEqual(flags[flags.index("--provider") + 1], "ollama")
         self.assertEqual(flags[flags.index("--model") + 1], "qwen3.5:4b")
+        self.assertIn("--no-builtin-tools", flags)
 
     def test_remote_provider_and_model_are_configurable(self):
         with patch.dict(

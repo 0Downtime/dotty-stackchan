@@ -55,6 +55,13 @@ services:
       # always bypassed while the shared Kid Mode toggle is active.
       - DOTTY_REALTIME_ENABLED=${DOTTY_REALTIME_ENABLED:-false}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_TTS_API_KEY=${OPENAI_TTS_API_KEY:-}
+      - OPENAI_TTS_MODEL=${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-coral}
+      - OPENAI_TTS_SPEED=${OPENAI_TTS_SPEED:-1.0}
+      - OPENAI_TTS_BASE_URL=${OPENAI_TTS_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_TTS_TIMEOUT_SECONDS=${OPENAI_TTS_TIMEOUT_SECONDS:-30}
+      - DOTTY_TTS_STATE_FILE=${DOTTY_TTS_STATE_FILE:-/var/lib/dotty-bridge/tts/provider}
       - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
       - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
       - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
@@ -83,6 +90,8 @@ services:
       - ./personas:/opt/xiaozhi-esp32-server/personas:ro
       - ./custom-providers/edge_stream/edge_stream.py:/opt/xiaozhi-esp32-server/core/providers/tts/edge_stream.py:ro
       - ./custom-providers/piper_local/piper_local.py:/opt/xiaozhi-esp32-server/core/providers/tts/piper_local.py:ro
+      - ./custom-providers/openai_tts:/opt/xiaozhi-esp32-server/core/providers/tts/openai_tts:ro
+      - ./custom-providers/dotty_switching:/opt/xiaozhi-esp32-server/core/providers/tts/dotty_switching:ro
       - ./models/piper:/opt/xiaozhi-esp32-server/models/piper:ro
       - ./custom-providers/asr/fun_local.py:/opt/xiaozhi-esp32-server/core/providers/asr/fun_local.py:ro
       - ./custom-providers/asr/whisper_local.py:/opt/xiaozhi-esp32-server/core/providers/asr/whisper_local.py:ro
@@ -116,3 +125,4 @@ services:
       # Override DOTTY_STATE_DIR if your bridge writes elsewhere. Keeps the
       # firmware kid/smart LED pips in sync with the dashboard across reconnects.
       - ${DOTTY_STATE_DIR:-/mnt/user/appdata/dotty-bridge/state}:/var/lib/dotty-bridge/state:ro
+      - ${DOTTY_TTS_STATE_DIR:-/mnt/user/appdata/dotty-bridge/tts}:/var/lib/dotty-bridge/tts:rw

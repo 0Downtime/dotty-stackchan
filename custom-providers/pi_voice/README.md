@@ -8,7 +8,8 @@ RPi-replacement path per [#36](https://github.com/BrettKinny/dotty-stackchan/iss
 
 What works:
 - `pi_client.py` — long-lived `pi --mode rpc` client; spawns once,
-  reuses across turns via `new_session`. Filters `thinking_delta`,
+  retains working context for turns with the same xiaozhi `session_id`,
+  and uses `new_session` at conversation boundaries. Filters `thinking_delta`,
   auto-cancels dialog `extension_ui_request`s, drops fire-and-forget
   UI requests. Throws `PiClientError` on rejected prompts / timeouts.
 - `pi_voice.py` — `LLMProvider` subclass that translates xiaozhi's
@@ -112,6 +113,8 @@ LLM:
   PiVoiceLLM:
     type: pi_voice
     container_name: dotty-pi
+    # Fresh conversation after 15 minutes without a user turn.
+    session_idle_timeout_seconds: 900
 ```
 
 The model + extension wiring lives container-side (in `dotty-pi/models.json`

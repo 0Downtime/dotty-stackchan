@@ -4,10 +4,11 @@ Owns a single `pi --mode rpc` process spawned via `docker exec -i` and
 multiplexes turns over its stdin/stdout. Per #36 Step-5 invariants:
 
   1. **Spawn once.** The pi process is started lazily on the first
-     turn and reused across all subsequent turns. Between turns we
-     issue `new_session` to clear state without re-spawning — that
-     recovers the per-turn startup tax (1.2-1.8 s warm spawn in the
-     spike report) that an in-process HTTP provider wouldn't have paid.
+     turn and reused across all subsequent turns. Turns in one xiaozhi
+     session share working context; at a conversation boundary we issue
+     `new_session` without re-spawning. That recovers the per-turn startup
+     tax (1.2-1.8 s warm spawn in the spike report) that an in-process
+     HTTP provider wouldn't have paid.
 
   2. **Auto-cancel `extension_ui_request`.** Dialog methods (`select`,
      `confirm`, `input`, `editor`) block pi until the client sends
@@ -54,6 +55,7 @@ def _default_pi_flags() -> tuple[str, ...]:
         "--mode", "rpc",
         "--provider", provider,
         "--model", model,
+        "--no-builtin-tools",
         "--no-session",
         "--no-context-files",
         "--offline",
@@ -190,8 +192,11 @@ class PiClient:
     # ------------------------------------------------------------------
 
     def new_session(self) -> None:
-        """Clear pi's session state without re-spawning. Call between
-        Dotty voice turns so each turn starts fresh."""
+        """Clear pi's session state without re-spawning.
+
+        PiVoiceLLM calls this at a xiaozhi conversation boundary, not between
+        ordinary follow-up turns in the same voice session.
+        """
         self._ensure_started()
         req_id = self._next_id("nsess")
         self._send({"id": req_id, "type": "new_session"})

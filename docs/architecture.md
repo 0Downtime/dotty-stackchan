@@ -122,7 +122,7 @@ sequenceDiagram
     BH-->>PI: latest cached vision description
 ```
 
-The seven voice tools in `dotty-pi-ext`: `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`. See [brain.md](./brain.md) for the full tool catalogue.
+The eight voice tools in `dotty-pi-ext`: `device_status`, `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`. See [brain.md](./brain.md) for the full tool catalogue.
 
 ## Why this shape
 
@@ -148,7 +148,7 @@ It does **not** know about llama-swap model names, brain.db, or OpenRouter keys.
 
 **dotty-pi (pi agent)** knows:
 - The llama-swap endpoint and model aliases (via `models.json` inside the container)
-- The `dotty-pi-ext` extension with the seven voice tools
+- The `dotty-pi-ext` extension with the eight voice tools
 - The persona files and `brain.db` (mounted from host appdata)
 
 It does **not** know about the xiaozhi WebSocket protocol or audio.
@@ -236,7 +236,7 @@ The canonical working copies live in this repo.
 | File / Directory | Deployed to | Purpose |
 |---|---|---|
 | `dotty-pi/` | Docker host `/mnt/user/appdata/dotty-pi-src/` | pi agent container (Dockerfile + docker-compose.yml) |
-| `dotty-pi-ext/` | Docker host (bind-mounted into dotty-pi) | dotty-pi-ext extension — seven voice tools |
+| `dotty-pi-ext/` | Docker host (bind-mounted into dotty-pi) | dotty-pi-ext extension — eight voice tools |
 | `dotty-behaviour/` | Docker host `/mnt/user/appdata/dotty-behaviour-src/` | Perception + ambient behaviour container |
 | `bridge.py` | Docker host (bridge.py container) | Admin dashboard FastAPI service |
 | `bridge/requirements.txt` | bridge.py container | Pinned Python deps |

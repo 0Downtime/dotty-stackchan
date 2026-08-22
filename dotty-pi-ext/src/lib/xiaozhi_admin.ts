@@ -25,6 +25,35 @@ export interface AdminOptions {
   timeoutMs?: number;
 }
 
+const DEVICE_STATUS_FALLBACK = "(device status unavailable)";
+
+/** Read the firmware's current volume/battery/screen/network status. */
+export async function fetchDeviceStatus(
+  opts: AdminOptions = {},
+): Promise<string> {
+  try {
+    const resp = await adminFetch(
+      "/xiaozhi/admin/device-status",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+      opts,
+    );
+    if (!resp.ok) return DEVICE_STATUS_FALLBACK;
+    const data = (await resp.json()) as { status?: unknown };
+    if (data.status === undefined || data.status === null) {
+      return DEVICE_STATUS_FALLBACK;
+    }
+    return typeof data.status === "string"
+      ? data.status
+      : JSON.stringify(data.status);
+  } catch {
+    return DEVICE_STATUS_FALLBACK;
+  }
+}
+
 function buildUrl(path: string, opts: AdminOptions = {}): string {
   const host = opts.host ?? DEFAULT_HOST;
   const port = opts.port ?? DEFAULT_HTTP_PORT;

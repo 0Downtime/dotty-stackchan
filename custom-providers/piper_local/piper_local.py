@@ -43,7 +43,7 @@ class TTSProvider(TTSProviderBase):
         super().__init__(config, delete_audio_file)
         self.interface_type = InterfaceType.SINGLE_STREAM
         self.voice = config.get("private_voice") or config.get(
-            "voice", "en_GB-cori-medium"
+            "voice", "en_US-kristin-medium"
         )
         self.audio_format = "pcm"
         self.before_stop_play_files = []

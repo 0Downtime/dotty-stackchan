@@ -6,15 +6,16 @@
       "apiKey": "dummy",
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "thinkingFormat": "qwen-chat-template"
       },
       "models": [
         {
           "id": "qwen3.5:4b",
           "name": "Qwen3.5 4B (Unraid llama.cpp, voice set)",
-          "reasoning": false,
+          "reasoning": true,
           "input": ["text"],
-          "contextWindow": 4096,
+          "contextWindow": 65536,
           "maxTokens": 2048,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         },
