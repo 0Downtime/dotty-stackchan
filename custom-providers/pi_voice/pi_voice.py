@@ -120,15 +120,13 @@ def _read_kid_mode() -> bool:
 
 
 def _session_idle_timeout_seconds(config: dict) -> float:
-    """Return the fallback boundary used when xiaozhi omits a session ID.
+    """Return the idle boundary between conversational sessions.
 
     Xiaozhi's voice connection defaults to a 120-second no-speech timeout.
     Matching that value keeps ID-less integrations useful without allowing
-    their working context to survive indefinitely.
-    """Return the idle boundary between conversational sessions.
-
-    The xiaozhi session ID remains the authoritative boundary when it changes;
-    the timeout also prevents a quiet, unchanged connection from living forever.
+    their working context to survive indefinitely. The xiaozhi session ID
+    remains the authoritative boundary when it changes; the timeout also
+    prevents a quiet, unchanged connection from living forever.
     """
     raw = config.get(
         "session_idle_timeout_seconds",
