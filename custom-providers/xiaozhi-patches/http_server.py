@@ -283,6 +283,7 @@ class SimpleHttpServer:
         except Exception as exc:
             self.logger.bind(tag=TAG).warning(f"device-status failed: {exc}")
             return web.json_response({"error": "device status unavailable"}, status=502)
+
     async def _dotty_abort(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/abort  Body: {"device_id": "<optional>"}
 
