@@ -322,7 +322,8 @@ class TestNewSessionLifecycle(unittest.TestCase):
         provider = LLMProvider(
             {"session_idle_timeout_seconds": 900}, client=client,
         )  # type: ignore[arg-type]
-        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 1000.0)):
+        clock = iter((100.0, 1000.0))
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=lambda: next(clock, 1000.0)):
             list(provider.response("same-session", [{"role": "user", "content": "a"}]))
             list(provider.response("same-session", [{"role": "user", "content": "b"}]))
         self.assertEqual(client.new_session_calls, 1)
@@ -346,7 +347,8 @@ class TestNewSessionLifecycle(unittest.TestCase):
             {"session_idle_timeout_seconds": 120}, client=client,
         )  # type: ignore[arg-type]
 
-        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 221.0)):
+        clock = iter((100.0, 221.0))
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=lambda: next(clock, 221.0)):
             list(provider.response(None, [{"role": "user", "content": "a"}]))
             list(provider.response(None, [{"role": "user", "content": "b"}]))
 

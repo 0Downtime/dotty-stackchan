@@ -42,6 +42,8 @@ class PiperLocalCacheTests(unittest.TestCase):
         tts_dto.SentenceType = MagicMock()
         core_utils_tts = types.ModuleType("core.utils.tts")
         core_utils_tts.MarkdownCleaner = MagicMock()
+        activity_tts = types.ModuleType("core.utils.activity_tts")
+        activity_tts.ActivityPlaybackMixin = type("ActivityPlaybackMixin", (), {})
         core_utils = types.ModuleType("core.utils")
         core_utils.opus_encoder_utils = MagicMock()
         core_utils.textUtils = MagicMock()
@@ -59,6 +61,7 @@ class PiperLocalCacheTests(unittest.TestCase):
             "core": core,
             "core.utils": core_utils,
             "core.utils.tts": core_utils_tts,
+            "core.utils.activity_tts": activity_tts,
             "core.providers": types.ModuleType("core.providers"),
             "core.providers.tts": types.ModuleType("core.providers.tts"),
             "core.providers.tts.base": tts_base,

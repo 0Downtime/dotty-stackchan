@@ -49,7 +49,7 @@ def _install_runtime_stubs() -> None:
             self.tts_audio_queue.put(("middle", [data], None))
 
         def _process_before_stop_play_files(self):
-            return None
+            self.tts_audio_queue.put(("last", [], None))
 
         async def close(self):
             return None
