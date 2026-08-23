@@ -7,7 +7,6 @@ provider's pure request/audio boundary without contacting OpenAI.
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import json
 import os

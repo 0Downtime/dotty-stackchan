@@ -343,9 +343,6 @@ def _ha_confirmation_prompt(tool_event: dict) -> str | None:
         f'Turn {action} {friendly}? Say "Confirm {action} {friendly}" '
         "within 15 seconds."
     )
-    return prompt
-
-
 def _enforce_leading_emoji(chunks: Iterator[str]) -> Iterator[str]:
     """Guarantee the firmware's leading-glyph face contract.
 
@@ -558,6 +555,7 @@ class LLMProvider(LLMProviderBase):
                 for event in tool_events
             )
             selected_chunks = ["😐 Light action cancelled."] if cancelled else model_chunks
+            spoken: list[str] = []
             for chunk in filter_tts_stream(
                 _enforce_leading_emoji(iter(selected_chunks)),
                 self._kid_mode,
