@@ -1,0 +1,13 @@
+{% if ok %}
+<div class="alert alert-info text-sm" role="status"
+     hx-get="/ui/tts-provider" hx-trigger="load delay:2s" hx-target="#tts-provider-card-body" hx-swap="innerHTML">
+  {% if provider == "openai_tts" %}OpenAI TTS selected.{% else %}Local Piper selected.{% endif %}
+  {% if restart_scheduled %}Restarting Xiaozhi now…{% endif %}
+</div>
+{% else %}
+<div class="alert alert-error text-sm" role="alert">
+  {{ error or "TTS provider switch failed." }}
+</div>
+<button type="button" class="btn btn-ghost btn-sm mt-2"
+        hx-get="/ui/tts-provider" hx-target="#tts-provider-card-body" hx-swap="innerHTML">Dismiss</button>
+{% endif %}

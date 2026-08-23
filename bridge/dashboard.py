@@ -11,6 +11,7 @@ service. Cards for unset hosts render as "unknown".
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -27,6 +28,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from bridge.face_bundles import (
+    BUNDLE_BY_ID,
+    BUNDLES,
+    FaceBundle,
+    FaceBundleStore,
+    effective_voice_profile,
+    public_bundle,
+)
+from bridge.activity import activity_store
+
 log = logging.getLogger("dashboard")
 
 # Bridge wires its in-process message handler in via configure(). Lets the
@@ -40,6 +51,8 @@ _state: dict[str, Any] = {
     "kid_mode_setter": None,
     "smart_mode_getter": None,
     "smart_mode_setter": None,
+    "tts_provider_getter": None,
+    "tts_provider_setter": None,
     "state_getter": None,
     "state_setter": None,
     "inject_to_device": None,
@@ -63,6 +76,7 @@ def configure(*, send_message: Any = None, vision_cache_getter: Any = None,
               scene_synthesis_cache_getter: Any = None,
               kid_mode_getter: Any = None, kid_mode_setter: Any = None,
               smart_mode_getter: Any = None, smart_mode_setter: Any = None,
+              tts_provider_getter: Any = None, tts_provider_setter: Any = None,
               state_getter: Any = None, state_setter: Any = None,
               inject_to_device: Any = None, abort_device: Any = None,
               subscribe_events: Any = None,
@@ -93,6 +107,10 @@ def configure(*, send_message: Any = None, vision_cache_getter: Any = None,
         _state["smart_mode_getter"] = smart_mode_getter
     if smart_mode_setter is not None:
         _state["smart_mode_setter"] = smart_mode_setter
+    if tts_provider_getter is not None:
+        _state["tts_provider_getter"] = tts_provider_getter
+    if tts_provider_setter is not None:
+        _state["tts_provider_setter"] = tts_provider_setter
     if state_getter is not None:
         _state["state_getter"] = state_getter
     if state_setter is not None:
@@ -291,12 +309,37 @@ XIAOZHI_HOST = os.environ.get("XIAOZHI_HOST", "")
 XIAOZHI_OTA_PORT = int(os.environ.get("XIAOZHI_OTA_PORT", "8003"))
 XIAOZHI_WS_PORT = int(os.environ.get("XIAOZHI_WS_PORT", "8000"))
 _ADMIN_TOKEN = os.environ.get("DOTTY_ADMIN_TOKEN", "").strip()
+_FACE_BUNDLE_STORE = FaceBundleStore()
 
 
 def _xiaozhi_admin_headers() -> dict[str, str]:
     """X-Admin-Token header for /xiaozhi/admin/* requests when DOTTY_ADMIN_TOKEN
     is set (matches the xiaozhi-server middleware); empty otherwise."""
     return {"X-Admin-Token": _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
+
+
+def _realtime_available() -> bool:
+    enabled = os.environ.get("DOTTY_REALTIME_ENABLED", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    return enabled and bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+def _face_admin_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
+    if not XIAOZHI_HOST:
+        return 503, {"error": "xiaozhi-server is not configured"}
+    url = f"http://{XIAOZHI_HOST}:{XIAOZHI_OTA_PORT}/xiaozhi/admin/{endpoint}"
+    try:
+        response = requests.request(
+            method, url, json=payload, headers=_xiaozhi_admin_headers(), timeout=3,
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"error": response.text[:200] or f"HTTP {response.status_code}"}
+        return response.status_code, body
+    except requests.RequestException as exc:
+        return 503, {"error": f"xiaozhi-server unavailable: {type(exc).__name__}"}
 LOG_DIR = Path(os.environ.get("CONVO_LOG_DIR", "/var/lib/dotty-bridge/logs"))
 VOICE_CHANNELS = ("dotty", "stackchan")
 
@@ -417,17 +460,18 @@ async def dashboard(request: Request) -> Any:
     )
 
 
-_ALLOWED_EMOJIS = ("😊", "😆", "😢", "😮", "🤔", "😠", "😐", "😍", "😴")
+_FACE_CATALOG = (
+    ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"),
+    ("😂", "funny"), ("😔", "sad"), ("😠", "angry"),
+    ("😭", "crying"), ("😍", "loving"), ("😳", "embarrassed"),
+    ("😲", "surprised"), ("😱", "shocked"), ("🤔", "thinking"),
+    ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+    ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+    ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+)
+_ALLOWED_EMOJIS = tuple(emoji for emoji, _ in _FACE_CATALOG)
 _EMOJI_FACE_NAMES = {
-    "😊": "happy",
-    "😆": "laughing",
-    "😢": "sad",
-    "😮": "surprised",
-    "🤔": "thinking",
-    "😠": "angry",
-    "😐": "neutral",
-    "😍": "loving",
-    "😴": "sleepy",
+    emoji: face_id for emoji, face_id in _FACE_CATALOG
 }
 
 # Songs live on the xiaozhi-server filesystem at this absolute container path
@@ -570,20 +614,25 @@ async def mood(request: Request, emoji: str = Form(...)) -> Any:
             request, "say_result.html",
             {"ok": False, "error": "Unknown emoji."},
         )
-    name = _EMOJI_FACE_NAMES.get(emoji, "")
-    if emoji == "😠" and name == "angry":
-        kid_getter = _state.get("kid_mode_getter")
-        kid_on = bool(kid_getter()) if kid_getter else True
-        if not kid_on:
-            name = "war"
-    if name:
-        prompt = (
-            f"Make the {emoji} face. Reply with exactly: "
-            f"'{emoji} This is my {name} face.' — nothing else."
-        )
-    else:
-        prompt = f"Make the {emoji} face. Reply with just '{emoji} ok'."
-    return await _inject_or_error(request, prompt, label=f"make the {emoji} face")
+    name = _EMOJI_FACE_NAMES[emoji]
+    if not XIAOZHI_HOST:
+        return templates.TemplateResponse(request, "say_result.html", {"ok": False, "error": "Xiaozhi host is not configured."})
+    url = f"http://{XIAOZHI_HOST}:{XIAOZHI_OTA_PORT}/xiaozhi/admin/set-emotion"
+
+    def _send() -> tuple[bool, str]:
+        try:
+            response = requests.post(url, json={"emotion": name}, headers=_xiaozhi_admin_headers(), timeout=4)
+            if response.ok:
+                return True, ""
+            return False, f"Xiaozhi returned HTTP {response.status_code}."
+        except requests.RequestException as exc:
+            return False, str(exc)
+
+    ok, error = await asyncio.to_thread(_send)
+    return templates.TemplateResponse(request, "say_result.html", {
+        "ok": ok, "error": error,
+        "sent": f"{emoji} {name}", "response": "Face sent directly." if ok else "",
+    })
 
 
 @router.post("/actions/dance", response_class=HTMLResponse, include_in_schema=False)
@@ -927,6 +976,143 @@ async def kid_mode_partial(request: Request) -> Any:
     )
 
 
+def _face_bundle_context(device_id: str = "") -> dict[str, Any]:
+    record = _FACE_BUNDLE_STORE.get(device_id)
+    kid_getter = _state.get("kid_mode_getter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    effective, override_warning = effective_voice_profile(
+        record.get("requested_voice_profile", "local-cori"),
+        kid_mode=kid_mode,
+        realtime_available=_realtime_available(),
+    )
+    warning = override_warning or record.get("warning", "")
+    return {
+        "bundles": [public_bundle(bundle) for bundle in BUNDLES],
+        "device_id": device_id,
+        "record": record,
+        "effective_voice_profile": effective,
+        "warning": warning,
+        "kid_mode": kid_mode,
+    }
+
+
+@router.get("/face-bundles", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundles_partial(request: Request, device_id: str = "") -> Any:
+    status, body = await asyncio.to_thread(
+        _face_admin_request, "GET", f"face-pack-status?device_id={device_id}", None,
+    )
+    resolved_id = str(body.get("device_id") or device_id)
+    if status == 200 and body.get("active_face_pack_id"):
+        _FACE_BUNDLE_STORE.mark_active(
+            resolved_id,
+            str(body["active_face_pack_id"]),
+            success=bool(body.get("success", True)),
+            reason=str(body.get("reason") or ""),
+        )
+    return templates.TemplateResponse(
+        request, "face_bundles.html", _face_bundle_context(resolved_id),
+    )
+
+
+async def _apply_face_bundle(
+    request: Request, bundle: FaceBundle, device_id: str,
+) -> Any:
+    kid_getter = _state.get("kid_mode_getter")
+    kid_setter = _state.get("kid_mode_setter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    if bundle.enables_kid_mode and not kid_mode:
+        if kid_setter is None:
+            return templates.TemplateResponse(
+                request, "face_bundle_result.html",
+                {"ok": False, "error": "Kid Mode cannot be enabled on this dashboard."},
+            )
+        result = await kid_setter(True)
+        if not (bool(result.get("ok")) if isinstance(result, dict) else bool(result)):
+            return templates.TemplateResponse(
+                request, "face_bundle_result.html",
+                {"ok": False, "error": "Kid Mode failed to enable; the bundle was not applied."},
+            )
+        kid_mode = True
+
+    _, voice_warning = effective_voice_profile(
+        bundle.requested_voice_profile,
+        kid_mode=kid_mode,
+        realtime_available=_realtime_available(),
+    )
+    _FACE_BUNDLE_STORE.set_requested(
+        device_id, bundle, pending=True, warning=voice_warning,
+    )
+    status, body = await asyncio.to_thread(
+        _face_admin_request,
+        "POST",
+        "set-face-pack",
+        {"device_id": device_id, "pack_id": bundle.face_pack_id},
+    )
+    resolved_id = str(body.get("device_id") or device_id)
+    if resolved_id and resolved_id != device_id:
+        _FACE_BUNDLE_STORE.set_requested(
+            resolved_id, bundle, pending=True, warning=voice_warning,
+        )
+    if status not in (200, 202):
+        # Desired state remains persisted. Reconnect sync will reassert it.
+        error = str(body.get("error") or f"HTTP {status}")
+        return templates.TemplateResponse(
+            request, "face_bundle_result.html",
+            {"ok": True, "pending": True, "warning": error},
+        )
+    return templates.TemplateResponse(
+        request, "face_bundle_result.html",
+        {"ok": True, "pending": True, "warning": voice_warning},
+    )
+
+
+@router.post("/actions/face-bundle/preview", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundle_preview(
+    request: Request,
+    bundle_id: str = Form(...),
+    device_id: str = Form(""),
+) -> Any:
+    bundle = BUNDLE_BY_ID.get(bundle_id)
+    if bundle is None:
+        raise HTTPException(400, "unknown face bundle")
+    current = _FACE_BUNDLE_STORE.get(device_id)
+    kid_getter = _state.get("kid_mode_getter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    changes_voice = current.get("requested_voice_profile") != bundle.requested_voice_profile
+    enables_kid = bundle.enables_kid_mode and not kid_mode
+    if not changes_voice and not enables_kid:
+        return await _apply_face_bundle(request, bundle, device_id)
+    effective, warning = effective_voice_profile(
+        bundle.requested_voice_profile,
+        kid_mode=(kid_mode or bundle.enables_kid_mode),
+        realtime_available=_realtime_available(),
+    )
+    return templates.TemplateResponse(
+        request,
+        "face_bundle_confirmation.html",
+        {
+            "bundle": public_bundle(bundle),
+            "device_id": device_id,
+            "changes_voice": changes_voice,
+            "enables_kid_mode": enables_kid,
+            "effective_voice_profile": effective,
+            "warning": warning,
+        },
+    )
+
+
+@router.post("/actions/face-bundle/apply", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundle_apply(
+    request: Request,
+    bundle_id: str = Form(...),
+    device_id: str = Form(""),
+) -> Any:
+    bundle = BUNDLE_BY_ID.get(bundle_id)
+    if bundle is None:
+        raise HTTPException(400, "unknown face bundle")
+    return await _apply_face_bundle(request, bundle, device_id)
+
+
 # Phase 4 — State + Smart-mode dashboard cards. Both are LIVE-update (no
 # daemon restart required). State picker pushes set_state MCP via the bridge
 # helper; smart-mode toggle pushes set_toggle MCP and persists to the state
@@ -1168,6 +1354,74 @@ async def smart_mode_partial(request: Request) -> Any:
          # was removed in the 2026-05-29 alignment pass. smart_mode is now
          # toggle-only on the live PiVoiceLLM path; model-swap is v2 scope.
          "model_swap_active": False},
+    )
+
+
+async def _tts_provider_snapshot() -> dict[str, Any]:
+    getter = _state.get("tts_provider_getter")
+    if getter is None:
+        return {"ok": False, "error": "TTS provider control is unavailable"}
+    try:
+        result = getter()
+        if inspect.isawaitable(result):
+            result = await result
+        return result if isinstance(result, dict) else {"ok": False, "error": "invalid provider response"}
+    except Exception as exc:
+        log.warning("tts_provider_getter failed", exc_info=True)
+        return {"ok": False, "error": str(exc)}
+
+
+@router.get("/tts-provider", response_class=HTMLResponse, include_in_schema=False)
+async def tts_provider_partial(request: Request) -> Any:
+    result = await _tts_provider_snapshot()
+    return templates.TemplateResponse(
+        request,
+        "tts_provider.html",
+        {
+            "available": _state.get("tts_provider_setter") is not None,
+            "ok": bool(result.get("ok")),
+            "provider": result.get("provider", "local_piper"),
+            "openai_configured": bool(result.get("openai_configured")),
+            "error": result.get("error"),
+        },
+    )
+
+
+@router.post("/actions/tts-provider", response_class=HTMLResponse, include_in_schema=False)
+async def tts_provider_set(request: Request, provider: str = Form(...)) -> Any:
+    provider = (provider or "").strip().lower()
+    if provider not in {"local_piper", "openai_tts"}:
+        return templates.TemplateResponse(
+            request,
+            "tts_provider_result.html",
+            {"ok": False, "error": "Unknown TTS provider."},
+        )
+    setter = _state.get("tts_provider_setter")
+    if setter is None:
+        raise HTTPException(503, "tts_provider_setter not configured")
+    try:
+        result = setter(provider)
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        log.exception("tts provider setter failed")
+        result = {"ok": False, "error": str(exc)}
+    if not isinstance(result, dict):
+        result = {"ok": bool(result)}
+    if not result.get("ok"):
+        return templates.TemplateResponse(
+            request,
+            "tts_provider_result.html",
+            {"ok": False, "error": result.get("error") or "TTS provider switch failed."},
+        )
+    return templates.TemplateResponse(
+        request,
+        "tts_provider_result.html",
+        {
+            "ok": True,
+            "provider": provider,
+            "restart_scheduled": bool(result.get("restart_scheduled")),
+        },
     )
 
 
@@ -1858,11 +2112,12 @@ async def host_detail(request: Request, slug: str) -> Any:
         st_getter = _state.get("state_getter")
         firmware_state = (st_getter() if st_getter else None) or "idle"
         voice_active = firmware_state in ("talk", "story_time")
-        # TTS / ASR provider names — these live in the xiaozhi-server
-        # YAML on Unraid; the bridge does not currently poll for them.
-        # TODO: when xiaozhi exposes /xiaozhi/admin/config (or similar),
-        # query it instead of hardcoding. For now we surface the known
-        # deployment values so the modal isn't blank.
+        tts_result = await _tts_provider_snapshot()
+        tts_provider = tts_result.get("provider")
+        tts_label = {
+            "local_piper": "LocalPiper",
+            "openai_tts": "OpenAI TTS",
+        }.get(tts_provider, "unknown")
         facts = [
             ("Host",     XIAOZHI_HOST or "(unset)"),
             ("OTA :%d" % XIAOZHI_OTA_PORT, "reachable" if ota_ok else "unreachable"),
@@ -1870,7 +2125,7 @@ async def host_detail(request: Request, slug: str) -> Any:
             ("Devices connected", "—" if n is None else f"{n}"),
             ("Voice channel", "active" if voice_active else "idle"),
             ("Current LLM", current_llm),
-            ("TTS provider", "LocalPiper"),
+            ("TTS provider", tts_label),
             ("ASR provider", "SenseVoice"),
             # TODO: surface today's xiaozhi error count once the bridge
             # tails the container log or xiaozhi exposes a metric.
@@ -2099,42 +2354,35 @@ async def security_recent(request: Request, device_id: str) -> Any:
     return templates.TemplateResponse(request, "security_panel.html", ctx)
 
 
-# --- P13 + P12: SSE event stream for live log + error toasts -------------
+# --- Unified replay + live activity stream -------------------------------
 
+@router.get("/activity", include_in_schema=False)
 @router.get("/events", include_in_schema=False)
 async def events_stream(request: Request) -> StreamingResponse:
-    """Server-Sent Events stream of completed conversation turns.
-
-    Each event is one JSON object: {ts, channel, request_text, response_text,
-    latency_ms, error, emoji_used}. The bridge's ConvoLogger broadcasts on
-    every turn. Heartbeats every 15s keep proxies / browsers awake.
-    """
-    subscribe = _state.get("subscribe_events")
-    unsubscribe = _state.get("unsubscribe_events")
-    if subscribe is None or unsubscribe is None:
-        raise HTTPException(503, "event broadcast not configured")
-    queue = subscribe()
+    """Replay and stream grouped turns plus hardware/perception events."""
+    queue, replay = activity_store.subscribe()
 
     async def gen():
         try:
-            # Tell EventSource how long to wait before reconnecting on drop.
             yield "retry: 5000\n\n".encode()
+            for item in replay:
+                event_name = item.get("item_type", "event")
+                event_id = item.get("event_id", item.get("item_id", ""))
+                payload = json.dumps(item, ensure_ascii=False)
+                yield f"id: {event_id}\nevent: {event_name}\ndata: {payload}\n\n".encode()
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    # Strip the heavy [Context] block before pushing — clients
-                    # only want the cleaned user payload.
-                    event = {**event,
-                             "request_text": _clean_request_text(
-                                 event.get("request_text") or "")}
-                    payload = json.dumps(event, ensure_ascii=False)
-                    yield f"data: {payload}\n\n".encode()
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_name = item.get("item_type", "event")
+                    event_id = item.get("event_id", item.get("item_id", ""))
+                    payload = json.dumps(item, ensure_ascii=False)
+                    yield f"id: {event_id}\nevent: {event_name}\ndata: {payload}\n\n".encode()
                 except asyncio.TimeoutError:
                     yield b": heartbeat\n\n"
         finally:
-            unsubscribe(queue)
+            activity_store.unsubscribe(queue)
 
     return StreamingResponse(
         gen(),
@@ -2144,5 +2392,3 @@ async def events_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
-
-

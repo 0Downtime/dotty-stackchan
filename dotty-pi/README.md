@@ -17,9 +17,11 @@ The runtime contract is:
 - **PiVoiceLLM / PiClient** translates each turn into a pi RPC request.
 - **pi** (this container) runs the prompt against llama-swap on the same
   host (`http://localhost:8080/v1`, model `qwen3.6:27b` by default), with
-  the [`dotty-pi-ext`](../dotty-pi-ext/) extension loaded for the seven
-  voice tools (`memory_lookup`, `remember`, `recall_person`,
+  the [`dotty-pi-ext`](../dotty-pi-ext/) extension loaded for eight native
+  voice tools (`device_status`, `memory_lookup`, `remember`, `recall_person`,
   `remember_person`, `think_hard`, `take_photo`, `play_song`).
+  Private external MCP tools are separately allowlisted and disabled by the
+  master switch documented in [`external-mcp.md`](../docs/external-mcp.md).
 
 ## Build + run on Unraid
 
@@ -32,9 +34,10 @@ DOTTY_PI_HOST=root@<UNRAID_HOST> bash scripts/deploy-dotty-pi.sh
 
 The script is the repeatable replacement for the old hand-run
 `docker build … && docker compose up -d`. It writes only the build context,
-`agent/models.json`, and `extensions/dotty-pi-ext/` — it never touches the
-live `memory/brain.db` or `persona/`, and it preserves the extension's
-hand-compiled `node_modules` (deps are unchanged; see
+`agent/models.json`, `agent/mcp.json`, and `extensions/dotty-pi-ext/` — it
+never touches the live `memory/brain.db`, persona, sessions, or credentials.
+The script rebuilds the exact lockfile in pinned Node Alpine, tests the staged
+extension, and atomically swaps the complete extension directory (see
 [`scripts/deploy-dotty-pi.sh`](../scripts/deploy-dotty-pi.sh) for the full
 contract). A functional voice-tool smoke test is a manual post-deploy step
 (the script prints the reminder) — keep the agent loop on `qwen3.5:4b`.
@@ -49,6 +52,7 @@ On-box layout (build context and live state are **separate** directories):
 └── dotty-pi/                    # bind-mount → /root/.pi (STATE_DIR)
     ├── agent/
     │   ├── models.json          # provider config (deployed)
+    │   ├── mcp.json             # isolated external MCP policy (deployed)
     │   ├── auth.json            # live — never touched by deploy
     │   └── sessions/            # live — never touched by deploy
     ├── persona/                 # Dotty persona — migrated from RPi (live)
@@ -57,7 +61,7 @@ On-box layout (build context and live state are **separate** directories):
     ├── sessions/                # pi session state (unused for now)
     └── extensions/
         └── dotty-pi-ext/        # voice-tool extension source (deployed)
-            └── node_modules/    # hand-compiled better-sqlite3 (preserved)
+            └── node_modules/    # Alpine-native locked dependencies (rebuilt)
 ```
 
 ## Model selection — DO NOT use `qwen3.6:27b` here

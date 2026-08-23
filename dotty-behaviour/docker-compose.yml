@@ -38,6 +38,8 @@ services:
       # xiaozhi-server admin endpoints (loopback on Unraid)
       - XIAOZHI_HOST=127.0.0.1
       - XIAOZHI_OTA_PORT=8003
+      - DOTTY_ACTIVITY_ENABLED=${DOTTY_ACTIVITY_ENABLED:-false}
+      - DOTTY_ACTIVITY_URL=http://127.0.0.1:8081/admin/activity
       # llama-swap for narrative LLM (dreams, dance reflections, scene synth)
       - NARRATIVE_LLM_URL=http://127.0.0.1:8080/v1
       - NARRATIVE_MODEL=qwen3.6:27b-think

@@ -4,10 +4,11 @@ Owns a single `pi --mode rpc` process spawned via `docker exec -i` and
 multiplexes turns over its stdin/stdout. Per #36 Step-5 invariants:
 
   1. **Spawn once.** The pi process is started lazily on the first
-     turn and reused across all subsequent turns. Between turns we
-     issue `new_session` to clear state without re-spawning — that
-     recovers the per-turn startup tax (1.2-1.8 s warm spawn in the
-     spike report) that an in-process HTTP provider wouldn't have paid.
+     turn and reused across all subsequent turns. Turns in one xiaozhi
+     session share working context; at a conversation boundary we issue
+     `new_session` without re-spawning. That recovers the per-turn startup
+     tax (1.2-1.8 s warm spawn in the spike report) that an in-process
+     HTTP provider wouldn't have paid.
 
   2. **Auto-cancel `extension_ui_request`.** Dialog methods (`select`,
      `confirm`, `input`, `editor`) block pi until the client sends
@@ -33,6 +34,7 @@ inside xiaozhi-server (synchronous generator interface, no asyncio).
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -46,18 +48,23 @@ from typing import Callable, Iterable, Iterator, List, Optional
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_PI_FLAGS = (
-    "--mode", "rpc",
-    "--provider", "ollama",
-    "--model", "qwen3.5:4b",
-    "--no-session",
-    "--no-context-files",
-    "--offline",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--thinking", "off",
-)
+def _default_pi_flags() -> tuple[str, ...]:
+    """Build agent flags from the deployment environment contract."""
+    provider = os.environ.get("DOTTY_PI_PROVIDER", "ollama")
+    model = os.environ.get("DOTTY_PI_MODEL", "qwen3.5:4b")
+    return (
+        "--mode", "rpc",
+        "--provider", provider,
+        "--model", model,
+        "--no-builtin-tools",
+        "--no-session",
+        "--no-context-files",
+        "--offline",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--thinking", "off",
+    )
 
 
 def default_subprocess_factory(
@@ -186,8 +193,11 @@ class PiClient:
     # ------------------------------------------------------------------
 
     def new_session(self) -> None:
-        """Clear pi's session state without re-spawning. Call between
-        Dotty voice turns so each turn starts fresh."""
+        """Clear pi's session state without re-spawning.
+
+        PiVoiceLLM calls this at a xiaozhi conversation boundary, not between
+        ordinary follow-up turns in the same voice session.
+        """
         self._ensure_started()
         req_id = self._next_id("nsess")
         self._send({"id": req_id, "type": "new_session"})
@@ -204,11 +214,22 @@ class PiClient:
             if (
                 frame.get("type") == "response"
                 and frame.get("command") == "new_session"
+                and frame.get("id") == req_id
             ):
+                if not frame.get("success", False):
+                    raise PiClientError(
+                        f"pi rejected new_session: {frame.get('error', 'unknown')}"
+                    )
                 return
         raise PiClientError("new_session timed out waiting for response")
 
-    def iter_turn_text(self, prompt: str) -> Iterator[str]:
+    def iter_turn_text(
+        self,
+        prompt: str,
+        on_tool_event: Callable[[dict], None] | None = None,
+        *,
+        event_callback: Callable[[dict], None] | None = None,
+    ) -> Iterator[str]:
         """Send a `prompt` command and yield user-visible text deltas
         until `agent_end`. Thinking deltas and any other event types
         are silently dropped — the caller's only job is to forward what
@@ -219,6 +240,7 @@ class PiClient:
 
         deadline = time.time() + self._turn_timeout_sec
         saw_accept = False
+        tool_calls: dict[str, dict] = {}
         while time.time() < deadline:
             try:
                 frame = self._event_queue.get(timeout=1.0)
@@ -243,6 +265,8 @@ class PiClient:
                         f"pi rejected prompt: {frame.get('error', 'unknown')}"
                     )
                 saw_accept = True
+                if event_callback:
+                    event_callback({"type": "model_started", "ts": time.monotonic()})
                 continue
 
             if ftype == "message_update":
@@ -251,10 +275,15 @@ class PiClient:
                     if ame.get("type") == "text_delta":
                         delta = ame.get("delta")
                         if isinstance(delta, str) and delta:
+                            if event_callback:
+                                event_callback({"type": "text_delta", "ts": time.monotonic()})
                             yield delta
                     elif ame.get("type") == "toolcall_end":
                         tool_call = ame.get("toolCall")
                         if isinstance(tool_call, dict):
+                            tool_id = str(tool_call.get("id", ""))
+                            if tool_id:
+                                tool_calls[tool_id] = copy.deepcopy(tool_call)
                             logger.info(
                                 "PiClient: tool call name=%s id=%s",
                                 tool_call.get("name", "unknown"),
@@ -262,6 +291,41 @@ class PiClient:
                             )
                 # thinking_delta, thinking_start, thinking_end and any
                 # other message_update sub-types are filtered out here.
+                continue
+
+            if ftype == "tool_execution_start":
+                if event_callback:
+                    event_callback({
+                        "type": "tool_started",
+                        "ts": time.monotonic(),
+                        "tool_call_id": str(frame.get("toolCallId") or "")[:96],
+                        "tool_name": str(frame.get("toolName") or "tool")[:80],
+                    })
+                continue
+
+            if ftype == "tool_execution_end":
+                tool_id = str(frame.get("toolCallId", ""))
+                tool_call = tool_calls.get(tool_id, {})
+                event = {
+                    "id": tool_id,
+                    "name": frame.get("toolName") or tool_call.get("name"),
+                    "arguments": copy.deepcopy(tool_call.get("arguments", {})),
+                    "is_error": frame.get("isError") is True,
+                    "result": copy.deepcopy(frame.get("result")),
+                }
+                if on_tool_event is not None:
+                    try:
+                        on_tool_event(event)
+                    except Exception:
+                        logger.exception("PiClient: tool telemetry callback failed")
+                if event_callback:
+                    event_callback({
+                        "type": "tool_finished",
+                        "ts": time.monotonic(),
+                        "tool_call_id": str(frame.get("toolCallId") or "")[:96],
+                        "tool_name": str(frame.get("toolName") or "tool")[:80],
+                        "tool_ok": not bool(frame.get("isError")),
+                    })
                 continue
 
             if ftype == "agent_end":
@@ -367,7 +431,7 @@ class PiClient:
 # PiClient ready to be used by xiaozhi-server.
 def make_default_pi_client() -> PiClient:
     container = os.environ.get("DOTTY_PI_CONTAINER", "dotty-pi")
-    pi_args: list[str] = list(_DEFAULT_PI_FLAGS)
+    pi_args: list[str] = list(_default_pi_flags())
     extra = os.environ.get("DOTTY_PI_EXTRA_FLAGS", "").split()
     if extra:
         pi_args.extend(extra)

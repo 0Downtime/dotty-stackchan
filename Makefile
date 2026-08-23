@@ -3,9 +3,9 @@ SHELL := /bin/bash
 
 # ── Model URLs ───────────────────────────────────────────────────────
 SENSEVOICE_REPO  := https://huggingface.co/FunAudioLLM/SenseVoiceSmall
-PIPER_BASE       := https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/medium
-PIPER_ONNX       := en_GB-cori-medium.onnx
-PIPER_JSON       := en_GB-cori-medium.onnx.json
+PIPER_BASE       := https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium
+PIPER_ONNX       := en_US-kristin-medium.onnx
+PIPER_JSON       := en_US-kristin-medium.onnx.json
 WHISPER_REPO     := https://huggingface.co/Systran/faster-whisper-small.en
 WHISPER_DIR      := models/whisper-small.en-ct2
 WHISPER_FILES    := config.json model.bin tokenizer.json vocabulary.txt
@@ -131,7 +131,7 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	   printf -v "$$var" '%s' "$$ans"; \
 	 }; \
 	 prompt XIAOZHI_HOST    "XIAOZHI_HOST     (LAN IP of Docker host)" "192.168.1.10"  "$$XIAOZHI_HOST"; \
-	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "Dotty"   "$${ROBOT_NAME:-Dotty}"; \
+	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "StackChan" "$${ROBOT_NAME:-StackChan}"; \
 	 prompt YOUR_NAME       "YOUR_NAME        (your name / org)" "Brett"               "$$YOUR_NAME"; \
 	 prompt TZ_VALUE        "TZ_VALUE         (IANA timezone)" "Australia/Brisbane"    "$$TZ_VALUE"; \
 	 echo ""; \
@@ -161,7 +161,7 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	 } > $(WIZARD_ENV); \
 	 echo "  $(WIZARD_ENV) — done"; \
 	 echo ""; \
-	 echo -e "$(BOLD)Ensuring .env + admin-API token...$(RESET)"; \
+	 echo -e "$(BOLD)Ensuring .env + service secrets...$(RESET)"; \
 	 if [ ! -f .env ]; then \
 	   cp .env.example .env; \
 	   echo "  .env created from .env.example"; \
@@ -175,6 +175,13 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	   echo -e "  $(YELLOW)NOTE:$(RESET) set the SAME value in the bridge / dotty-behaviour /"; \
 	   echo "        dotty-pi deploy-dir .env files, or their admin calls will 401."; \
 	   echo "        See .env.example ('Admin API auth') for details."; \
+	 fi; \
+	 if grep -q '^DOTTY_CSRF_SECRET=' .env; then \
+	   echo -e "  $(GREEN)DOTTY_CSRF_SECRET already present in .env — keeping it.$(RESET)"; \
+	 else \
+	   CSRF_SECRET=$$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); \
+	   printf '\nDOTTY_CSRF_SECRET=%s\n' "$$CSRF_SECRET" >> .env; \
+	   echo "  generated DOTTY_CSRF_SECRET → .env (persists dashboard CSRF tokens)"; \
 	 fi; \
 	 echo ""; \
 	 echo -e "$(BOLD)Rendering templates...$(RESET)"; \
@@ -385,9 +392,9 @@ doctor: ## Run health checks on config, models, and services
 # ─────────────────────────────────────────────────────────────────────
 # audit — verify "local except LLM" network claim
 # ─────────────────────────────────────────────────────────────────────
-audit: ## Audit outbound network connections (verify local-except-LLM claim)
+audit: ## Audit outbound network connections (verify explicit AI-provider-only claim)
 	@echo ""
-	@echo -e "$(BOLD)Network audit — verifying 'local except LLM' claim$(RESET)"
+	@echo -e "$(BOLD)Network audit — verifying explicit AI-provider-only claim$(RESET)"
 	@echo ""
 	@if [ -f data/.config.yaml ]; then CFG=data/.config.yaml; \
 	 elif [ -f .config.yaml ]; then CFG=.config.yaml; \
@@ -404,8 +411,8 @@ audit: ## Audit outbound network connections (verify local-except-LLM claim)
 	     PASS=$$((PASS+1)); \
 	   else \
 	     echo "$$CONNS" | while read line; do echo "  $$line"; done; \
-	     LLM=$$(echo "$$CONNS" | grep -cE "openrouter|cloudflare|anthropic" || true); \
-	     OTHER=$$(echo "$$CONNS" | grep -cvE "openrouter|cloudflare|anthropic|tailscale|100\." || true); \
+	     LLM=$$(echo "$$CONNS" | grep -cE "openrouter|cloudflare|anthropic|openai" || true); \
+	     OTHER=$$(echo "$$CONNS" | grep -cvE "openrouter|cloudflare|anthropic|openai|tailscale|100\." || true); \
 	     if [ "$$OTHER" -gt 0 ]; then \
 	       echo -e "  $(RED)FAIL$(RESET)  Unexpected external connections detected"; \
 	       FAIL=$$((FAIL+1)); \

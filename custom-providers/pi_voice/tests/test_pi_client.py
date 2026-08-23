@@ -17,12 +17,13 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 # Make the package importable as `pi_voice.*` regardless of cwd.
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from pi_client import PiClient, PiClientError  # noqa: E402
+from pi_client import PiClient, PiClientError, _default_pi_flags  # noqa: E402
 
 
 class FakePopen:
@@ -156,6 +157,7 @@ class TestSpawnOnce(unittest.TestCase):
                     for cmd in fake.stdin_lines:
                         if cmd.get("type") == "new_session":
                             fake.emit({
+                                "id": cmd["id"],
                                 "type": "response", "command": "new_session",
                                 "success": True,
                             })
@@ -240,6 +242,89 @@ class TestToolCallTelemetry(unittest.TestCase):
             joined = "\n".join(logs.output)
             self.assertIn("tool call name=remember id=tool-7", joined)
             self.assertNotIn("private", joined)
+        finally:
+            client.close()
+
+    def test_execution_result_callback_receives_correlated_defensive_copy(self):
+        fake = FakePopen()
+        client = make_client(fake)
+        observed = []
+        try:
+            def feed():
+                fake.emit({
+                    "id": "turn-1", "type": "response",
+                    "command": "prompt", "success": True,
+                })
+                fake.emit({
+                    "type": "message_update",
+                    "assistantMessageEvent": {
+                        "type": "toolcall_end",
+                        "toolCall": {
+                            "id": "tool-9",
+                            "name": "home_assistant_HassTurnOn",
+                            "arguments": {"name": "Kitchen"},
+                        },
+                    },
+                })
+                fake.emit({
+                    "type": "tool_execution_end",
+                    "toolCallId": "tool-9",
+                    "toolName": "home_assistant_HassTurnOn",
+                    "result": {"content": [{
+                        "type": "text",
+                        "text": "DOTTY_CONFIRMATION_REQUIRED: Confirm on Kitchen",
+                    }]},
+                    "isError": True,
+                })
+                fake.emit({"type": "agent_end"})
+
+            threading.Thread(target=feed, daemon=True).start()
+            self.assertEqual(list(client.iter_turn_text("turn it on", observed.append)), [])
+            self.assertEqual(observed[0]["arguments"], {"name": "Kitchen"})
+            self.assertTrue(observed[0]["is_error"])
+            observed[0]["arguments"]["name"] = "changed"
+            self.assertNotIn("changed", "\n".join(client.recent_stderr()))
+        finally:
+            client.close()
+
+    def test_rpc_lifecycle_callback_excludes_tool_arguments_and_results(self):
+        fake = FakePopen()
+        client = make_client(fake)
+        events = []
+        try:
+            def feed():
+                fake.emit({
+                    "id": "turn-1", "type": "response",
+                    "command": "prompt", "success": True,
+                })
+                fake.emit({
+                    "type": "tool_execution_start", "toolCallId": "tool-9",
+                    "toolName": "weather", "args": {"location": "private"},
+                })
+                fake.emit({
+                    "type": "tool_execution_end", "toolCallId": "tool-9",
+                    "toolName": "weather", "isError": False,
+                    "result": {"forecast": "private"},
+                })
+                fake.emit({
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "sunny"},
+                })
+                fake.emit({"type": "agent_end"})
+
+            threading.Thread(target=feed, daemon=True).start()
+            self.assertEqual(
+                list(client.iter_turn_text("forecast", event_callback=events.append)),
+                ["sunny"],
+            )
+            self.assertEqual(
+                [event["type"] for event in events],
+                ["model_started", "tool_started", "tool_finished", "text_delta"],
+            )
+            encoded = json.dumps(events)
+            self.assertNotIn("private", encoded)
+            self.assertNotIn("args", encoded)
+            self.assertNotIn("result", encoded)
         finally:
             client.close()
 
@@ -357,6 +442,30 @@ class TestTurnTimeout(unittest.TestCase):
             self.assertIn("timed out", str(ctx.exception))
         finally:
             client.close()
+
+
+class TestDefaultFlags(unittest.TestCase):
+    def test_appliance_defaults_remain_unchanged(self):
+        with patch.dict(os.environ, {}, clear=True):
+            flags = _default_pi_flags()
+        self.assertEqual(flags[flags.index("--provider") + 1], "ollama")
+        self.assertEqual(flags[flags.index("--model") + 1], "qwen3.5:4b")
+        self.assertIn("--no-builtin-tools", flags)
+
+    def test_remote_provider_and_model_are_configurable(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DOTTY_PI_PROVIDER": "omlx",
+                "DOTTY_PI_MODEL": "Qwen3.5-4B-MLX-4bit",
+            },
+            clear=True,
+        ):
+            flags = _default_pi_flags()
+        self.assertEqual(flags[flags.index("--provider") + 1], "omlx")
+        self.assertEqual(
+            flags[flags.index("--model") + 1], "Qwen3.5-4B-MLX-4bit"
+        )
 
 
 if __name__ == "__main__":

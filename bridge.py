@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -42,6 +43,7 @@ from textUtils import (  # noqa: F401  (re-exported for downstream tools)
 )
 
 from bridge.csrf import CSRFMiddleware
+from bridge.activity import ActivityEnvelope, activity_store
 from bridge.text import (  # noqa: F401  (used by bridge.dashboard via re-imports)
     CONTENT_FILTER_REPLACEMENT,
     MAX_SENTENCES,
@@ -720,6 +722,55 @@ if _configure_dashboard is not None:
         ok = await _dispatch_set_state("", state)
         return {"ok": ok}
 
+    async def _dashboard_tts_provider_get() -> dict:
+        """Read the non-secret TTS provider state from xiaozhi-server."""
+        if not _XIAOZHI_HOST:
+            return {"ok": False, "error": "XIAOZHI_HOST not set"}
+        url = f"http://{_XIAOZHI_HOST}:{_XIAOZHI_HTTP_PORT}/xiaozhi/admin/tts-provider"
+
+        def _get() -> dict:
+            try:
+                response = requests.get(
+                    url, headers=_xiaozhi_admin_headers(), timeout=3
+                )
+                data = response.json()
+                if response.status_code == 200:
+                    return {"ok": True, **data}
+                return {"ok": False, "error": f"HTTP {response.status_code}"}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return await asyncio.to_thread(_get)
+
+    async def _dashboard_tts_provider_set(provider: str) -> dict:
+        """Switch TTS through the authenticated xiaozhi admin surface."""
+        if not _XIAOZHI_HOST:
+            return {"ok": False, "error": "XIAOZHI_HOST not set"}
+        url = f"http://{_XIAOZHI_HOST}:{_XIAOZHI_HTTP_PORT}/xiaozhi/admin/tts-provider"
+
+        def _post() -> dict:
+            try:
+                response = requests.post(
+                    url,
+                    json={"provider": provider},
+                    headers=_xiaozhi_admin_headers(),
+                    timeout=3,
+                )
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                if response.status_code == 200:
+                    return {"ok": True, **data}
+                return {
+                    "ok": False,
+                    "error": data.get("error") or f"HTTP {response.status_code}",
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return await asyncio.to_thread(_post)
+
     async def _dashboard_set_smart_mode(enabled: bool) -> dict:
         """Persist smart_mode + push the firmware LED pip. On the live
         PiVoiceLLM path there is no backend model swap (v2 scope) — the
@@ -758,6 +809,8 @@ if _configure_dashboard is not None:
         kid_mode_setter=_dashboard_set_kid_mode,
         smart_mode_getter=_read_smart_mode,
         smart_mode_setter=_dashboard_set_smart_mode,
+        tts_provider_getter=_dashboard_tts_provider_get,
+        tts_provider_setter=_dashboard_tts_provider_set,
         state_getter=_dashboard_state_getter,
         state_setter=_dashboard_set_state,
         inject_to_device=_dashboard_inject_to_device,
@@ -800,6 +853,30 @@ def _admin_require_localhost(request: Request) -> None:
         raise HTTPException(status_code=403, detail="admin endpoints are localhost-only")
 
 
+def _admin_require_activity_access(request: Request) -> None:
+    """Allow loopback, or a container peer presenting the shared token.
+
+    The dashboard uses host networking while xiaozhi-server is bridge-
+    networked, so its authenticated request does not appear as 127.0.0.1.
+    Without a configured token the endpoint remains strictly loopback-only.
+    """
+    host = request.client.host if request.client else ""
+    if _ADMIN_TOKEN:
+        supplied = request.headers.get("X-Admin-Token", "").strip()
+        try:
+            matches = secrets.compare_digest(supplied.encode(), _ADMIN_TOKEN.encode())
+        except (TypeError, UnicodeError):
+            matches = False
+        if not matches:
+            raise HTTPException(status_code=401, detail="invalid activity token")
+        return
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=403,
+            detail="activity endpoint requires loopback or DOTTY_ADMIN_TOKEN",
+        )
+
+
 class _AdminKidModeIn(BaseModel):
     enabled: bool
     device_id: str = ""
@@ -828,6 +905,18 @@ class _AdminSafetyIn(BaseModel):
 _admin_router = APIRouter(
     prefix="/admin", dependencies=[Depends(_admin_require_localhost)],
 )
+
+
+_activity_router = APIRouter(
+    prefix="/admin", dependencies=[Depends(_admin_require_activity_access)],
+)
+
+
+@_activity_router.post("/activity")
+async def _admin_activity(payload: ActivityEnvelope) -> dict:
+    """Ingest one sanitized lifecycle/perception event for the dashboard."""
+    item = activity_store.ingest(payload)
+    return {"ok": True, "duplicate": item is None}
 
 
 @_admin_router.post("/kid-mode")
@@ -950,6 +1039,7 @@ async def _admin_safety(payload: _AdminSafetyIn) -> dict:
 
 
 app.include_router(_admin_router)
+app.include_router(_activity_router)
 
 
 if __name__ == "__main__":

@@ -1,21 +1,36 @@
 {
   "name": "dotty-pi-ext",
   "version": "0.1.0",
-  "description": "Pi extension exposing Dotty's seven voice tools (memory_lookup, remember, recall_person, remember_person, think_hard, take_photo, play_song). Ports bridge.py's _voice_tool_* handlers per #36; recall_person/remember_person added per #53.",
+  "description": "Pi extension exposing Dotty's eight voice tools (device_status, memory_lookup, remember, recall_person, remember_person, think_hard, take_photo, play_song). Ports bridge.py's _voice_tool_* handlers per #36; recall_person/remember_person added per #53.",
   "type": "module",
   "private": true,
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
+    "pi-mcp-adapter": "2.13.0",
     "typebox": "^1.1.38"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "@earendil-works/pi-coding-agent": "0.74.0"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "esbuild": "0.28.1",
+    "protobufjs": "7.6.5",
+    "undici": "7.29.0",
+    "ws": "8.21.3"
   },
   "scripts": {
-    "test": "npm run test:memory && npm run test:memgate && npm run test:recall && npm run test:remember && npm run test:rememberperson && npm run test:turnlog && npm run test:think && npm run test:play && npm run test:adminauth",
+    "test": "npm run test:mcp-config && npm run test:mcp-pilot && npm run test:mcp-adapter && npm run test:ha-policy && npm run test:device && npm run test:memory && npm run test:memgate && npm run test:recall && npm run test:remember && npm run test:rememberperson && npm run test:turnlog && npm run test:think && npm run test:play && npm run test:adminauth",
+    "test:mcp-config": "node --import tsx tests/mcp_config.test.ts",
+    "test:mcp-pilot": "node --experimental-strip-types tests/mcp_pilot.test.ts",
+    "test:mcp-adapter": "node --import tsx tests/mcp_adapter.test.ts",
+    "test:ha-policy": "node --import tsx tests/ha_confirmation.test.ts",
+    "test:device": "node --experimental-strip-types tests/device_status.test.ts",
     "test:memory": "node --experimental-strip-types tests/memory_lookup.test.ts",
     "test:memgate": "node --experimental-strip-types tests/memory_gate.test.ts",
     "test:recall": "node --experimental-strip-types tests/recall_person.test.ts",
@@ -25,5 +40,10 @@
     "test:think": "node --experimental-strip-types tests/think_hard.test.ts",
     "test:play": "node --experimental-strip-types tests/play_song.test.ts",
     "test:adminauth": "node --experimental-strip-types tests/admin_auth.test.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.74.0",
+    "@modelcontextprotocol/client": "2.0.0-beta.5",
+    "tsx": "4.21.0"
   }
 }

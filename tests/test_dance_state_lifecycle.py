@@ -109,6 +109,52 @@ class _Conn:
 
 
 class TestDanceStateLifecycle(unittest.TestCase):
+    def test_barge_in_abort_does_not_poison_successor_chat(self):
+        async def run():
+            events = []
+            conn = types.SimpleNamespace(
+                logger=_Logger(),
+                websocket=_WebSocket(),
+                session_id="session",
+                need_bind=False,
+                max_output_size=0,
+                client_is_speaking=True,
+                client_listen_mode="auto",
+                client_abort=False,
+                current_state="idle",
+            )
+
+            async def abort_predecessor(target):
+                events.append("abort")
+                target.client_abort = True
+                target.client_is_speaking = False
+
+            async def inspect_intent(target, _text):
+                events.append("intent")
+                self.assertFalse(target.client_abort)
+                return False
+
+            def inspect_submit(target, text, **kwargs):
+                events.append("submit")
+                self.assertFalse(target.client_abort)
+                self.assertEqual(text, "hello")
+                self.assertIn("turn_id", kwargs)
+                self.assertEqual(kwargs["request_text"], "hello")
+
+            with (
+                patch.object(_module, "_sync_toggles_once", new=AsyncMock()),
+                patch.object(_module, "handleAbortMessage", side_effect=abort_predecessor),
+                patch.object(_module, "handle_user_intent", side_effect=inspect_intent),
+                patch.object(_module, "send_stt_message", new=AsyncMock()),
+                patch.object(_module, "_submit_chat", side_effect=inspect_submit),
+            ):
+                await _module.startToChat(conn, "hello")
+
+            self.assertEqual(events, ["abort", "intent", "submit"])
+            self.assertFalse(conn.client_abort)
+
+        asyncio.run(run())
+
     def test_led_helper_uses_firmware_schema_names(self):
         async def run():
             call = AsyncMock()

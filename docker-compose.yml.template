@@ -45,12 +45,32 @@ services:
       # and the firmware pips desync from the dashboard on every reconnect.
       - DOTTY_KID_MODE_STATE=/var/lib/dotty-bridge/state/kid-mode
       - DOTTY_SMART_MODE_STATE=/var/lib/dotty-bridge/state/smart-mode
+      - DOTTY_FACE_BUNDLE_STATE=/var/lib/dotty-bridge/state/face-bundles.json
       # Shared admin-API secret (X-Admin-Token). Read from ./.env — `make
       # setup` generates it. Unset/empty = permissive (admin routes open);
       # set = this server enforces it AND every caller (bridge,
       # dotty-behaviour, dotty-pi) must carry the same value in its own
       # .env. See .env.example.
       - DOTTY_ADMIN_TOKEN=${DOTTY_ADMIN_TOKEN:-}
+      # Experimental direct speech-to-speech route. Disabled by default and
+      # always bypassed while the shared Kid Mode toggle is active.
+      - DOTTY_REALTIME_ENABLED=${DOTTY_REALTIME_ENABLED:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_TTS_API_KEY=${OPENAI_TTS_API_KEY:-}
+      - OPENAI_TTS_MODEL=${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-coral}
+      - OPENAI_TTS_SPEED=${OPENAI_TTS_SPEED:-1.0}
+      - OPENAI_TTS_BASE_URL=${OPENAI_TTS_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_TTS_TIMEOUT_SECONDS=${OPENAI_TTS_TIMEOUT_SECONDS:-30}
+      - DOTTY_TTS_STATE_FILE=${DOTTY_TTS_STATE_FILE:-/var/lib/dotty-bridge/tts/provider}
+      - DOTTY_REALTIME_MODEL=${DOTTY_REALTIME_MODEL:-gpt-realtime-2.1-mini}
+      - DOTTY_REALTIME_VOICE=${DOTTY_REALTIME_VOICE:-marin}
+      - DOTTY_REALTIME_TRANSCRIPTION_MODEL=${DOTTY_REALTIME_TRANSCRIPTION_MODEL:-gpt-live-transcribe}
+      - DOTTY_REALTIME_REASONING_EFFORT=${DOTTY_REALTIME_REASONING_EFFORT:-low}
+      - DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS=${DOTTY_REALTIME_CONNECT_TIMEOUT_SECONDS:-10}
+      - DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS=${DOTTY_REALTIME_EVENT_TIMEOUT_SECONDS:-8}
+      - DOTTY_ACTIVITY_ENABLED=${DOTTY_ACTIVITY_ENABLED:-false}
+      - DOTTY_ACTIVITY_URL=http://<XIAOZHI_HOST>:8081/admin/activity
     ports:
       - "8000:8000"
       - "8003:8003"
@@ -60,6 +80,10 @@ services:
       - ./tmp:/opt/xiaozhi-esp32-server/tmp
       - ./custom-providers/openai_compat:/opt/xiaozhi-esp32-server/core/providers/llm/openai_compat
       - ./custom-providers/pi_voice:/opt/xiaozhi-esp32-server/core/providers/llm/pi_voice
+      - ./custom-providers/openai_realtime:/opt/xiaozhi-esp32-server/core/providers/realtime:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_telemetry.py:/opt/xiaozhi-esp32-server/core/utils/activity_telemetry.py:ro
+      - ./custom-providers/xiaozhi-patches/activity_tts.py:/opt/xiaozhi-esp32-server/core/utils/activity_tts.py:ro
       # PiVoiceLLM shells out to `docker exec -i dotty-pi pi --mode rpc ...`,
       # so this container needs the docker CLI binary AND the host docker
       # socket. WARNING: mounting /var/run/docker.sock gives this container
@@ -72,6 +96,8 @@ services:
       - ./personas:/opt/xiaozhi-esp32-server/personas:ro
       - ./custom-providers/edge_stream/edge_stream.py:/opt/xiaozhi-esp32-server/core/providers/tts/edge_stream.py:ro
       - ./custom-providers/piper_local/piper_local.py:/opt/xiaozhi-esp32-server/core/providers/tts/piper_local.py:ro
+      - ./custom-providers/openai_tts:/opt/xiaozhi-esp32-server/core/providers/tts/openai_tts:ro
+      - ./custom-providers/dotty_switching:/opt/xiaozhi-esp32-server/core/providers/tts/dotty_switching:ro
       - ./models/piper:/opt/xiaozhi-esp32-server/models/piper:ro
       - ./custom-providers/asr/fun_local.py:/opt/xiaozhi-esp32-server/core/providers/asr/fun_local.py:ro
       - ./custom-providers/asr/whisper_local.py:/opt/xiaozhi-esp32-server/core/providers/asr/whisper_local.py:ro
@@ -84,6 +110,7 @@ services:
       # DOTTY DeviceCommand seam: MCP request ids + envelope + per-conn
       # serialized sends, shared by http_server.py + receiveAudioHandle.py
       - ./custom-providers/xiaozhi-patches/device_command.py:/opt/xiaozhi-esp32-server/core/utils/device_command.py:ro
+      - ./bridge/face_bundles.py:/opt/xiaozhi-esp32-server/core/utils/face_bundles.py:ro
       - ./songs:/opt/xiaozhi-esp32-server/config/assets/songs:ro
       # DOTTY portal: admin /inject-text route + active-connection registry
       - ./custom-providers/xiaozhi-patches/portal_bridge.py:/opt/xiaozhi-esp32-server/core/portal_bridge.py:ro
@@ -105,3 +132,4 @@ services:
       # Override DOTTY_STATE_DIR if your bridge writes elsewhere. Keeps the
       # firmware kid/smart LED pips in sync with the dashboard across reconnects.
       - ${DOTTY_STATE_DIR:-/mnt/user/appdata/dotty-bridge/state}:/var/lib/dotty-bridge/state:ro
+      - ${DOTTY_TTS_STATE_DIR:-/mnt/user/appdata/dotty-bridge/tts}:/var/lib/dotty-bridge/tts:rw

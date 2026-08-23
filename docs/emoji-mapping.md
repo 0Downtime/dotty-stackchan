@@ -9,27 +9,21 @@ Every LLM response starts with an emoji. The xiaozhi-server parses this
 emoji and sends an emotion frame to the StackChan firmware, which renders
 the corresponding face animation.
 
-## Active Mapping
+## Active mapping
 
-| Emoji | Emotion ID | Face Animation | Source |
-|-------|-----------|----------------|--------|
-| 😊 | `happy` | Smiling face | Dotty patch |
-| 😆 | `laughing` | Laughing face | Upstream |
-| 😢 | `sad` | Sad face | Dotty patch |
-| 😮 | `surprised` | Surprised face | Dotty patch |
-| 🤔 | `thinking` | Thinking face | Upstream |
-| 😠 | `angry` | Angry face | Upstream |
-| 😐 | `neutral` | Neutral face | Dotty patch |
-| 😍 | `loving` | Love face | Upstream |
-| 😴 | `sleepy` | Sleepy face | Upstream |
+The canonical ordered catalog is defined by `FACE_CATALOG` in
+`custom-providers/textUtils.py`: 😶 neutral, 🙂 happy, 😆 laughing, 😂 funny,
+😔 sad, 😠 angry, 😭 crying, 😍 loving, 😳 embarrassed, 😲 surprised, 😱
+shocked, 🤔 thinking, 😉 winking, 😎 cool, 😌 relaxed, 🤤 delicious, 😘 kissy,
+😏 confident, 😴 sleepy, 😜 silly, and 🙄 confused.
 
-"Dotty patch" means the emoji was added to the upstream `EMOJI_MAP` in
-`custom-providers/textUtils.py`. "Upstream" means it exists in the base
-xiaozhi-server code.
+For backward compatibility, 😊 maps to happy, 😢 to sad, 😮 to surprised, and
+😐 to neutral. New UI and admin clients should use the canonical catalog.
 
 ## Enforcement on the live PiVoiceLLM path
 
-`build_turn_suffix()` requests one of the nine allowed emojis on every turn.
+`build_turn_suffix()` requests one canonical emoji (legacy aliases are also
+accepted) on every turn.
 `PiVoiceLLM._enforce_leading_emoji()` then enforces the wire contract: it
 preserves an allowed prefix or prepends neutral `😐` before TTS. Persona files
 and xiaozhi's top-level `.config.yaml` prompt are not forwarded by PiVoiceLLM;
@@ -52,9 +46,9 @@ See [docs/cookbook/add-emoji.md](cookbook/add-emoji.md).
 | Emoji → emotion | `custom-providers/textUtils.py` | `EMOJI_MAP` dict, `get_emotion()` |
 | Emotion → face | StackChan firmware | Avatar renderer, expression assets |
 
-## Upstream Emojis Not Used by Dotty
+## Deterministic UAT
 
-The upstream `EMOJI_MAP` includes additional emojis that Dotty doesn't
-use in its 9-emoji set: 😂 😭 😲 😱 😌 😜 🙄 😶 🙂 😳 😉 😎 🤤 😘 😏.
-PiVoiceLLM's per-turn suffix constrains responses to the nine emojis above,
-and its `ALLOWED_EMOJIS` check replaces any other leading emoji with `😐`.
+Authenticated administrators can bypass the LLM and set a face directly with
+`POST /xiaozhi/admin/set-emotion` and JSON
+`{"emotion":"<catalog-id>","device_id":"<optional>"}`. The server validates
+the ID, derives its canonical emoji, and emits the normal `llm` emotion frame.

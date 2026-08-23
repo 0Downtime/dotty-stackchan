@@ -1,5 +1,6 @@
 import os
 import queue
+import threading
 import traceback
 from math import gcd
 
@@ -12,17 +13,34 @@ from core.providers.tts.base import TTSProviderBase
 from core.providers.tts.dto.dto import ContentType, InterfaceType, SentenceType
 from core.utils import opus_encoder_utils, textUtils
 from core.utils.tts import MarkdownCleaner
+from core.utils.activity_tts import ActivityPlaybackMixin
 
 TAG = __name__
 logger = setup_logging()
 
 
-class TTSProvider(TTSProviderBase):
+# Piper owns a sizeable ONNX Runtime session. Keep it process-wide while
+# leaving queues, encoders, and activity state per provider connection.
+_VOICE_CACHE = {}
+_VOICE_CACHE_LOCK = threading.Lock()
+
+
+def _cached_voice(model_path, config_path):
+    key = (os.path.realpath(model_path), os.path.realpath(config_path))
+    with _VOICE_CACHE_LOCK:
+        cached = _VOICE_CACHE.get(key)
+        if cached is None:
+            cached = (PiperVoice.load(model_path, config_path), threading.RLock())
+            _VOICE_CACHE[key] = cached
+        return cached
+
+
+class TTSProvider(ActivityPlaybackMixin, TTSProviderBase):
     def __init__(self, config, delete_audio_file):
         super().__init__(config, delete_audio_file)
         self.interface_type = InterfaceType.SINGLE_STREAM
         self.voice = config.get("private_voice") or config.get(
-            "voice", "en_GB-cori-medium"
+            "voice", "en_US-kristin-medium"
         )
         self.audio_format = "pcm"
         self.before_stop_play_files = []
@@ -52,7 +70,7 @@ class TTSProvider(TTSProviderBase):
                 f"piper_local: config_path missing or not found: {config_path!r}"
             )
 
-        self.voice_obj = PiperVoice.load(model_path, config_path)
+        self.voice_obj, self._voice_lock = _cached_voice(model_path, config_path)
 
         self.opus_encoder = opus_encoder_utils.OpusEncoderUtils(
             sample_rate=24000, channels=1, frame_size_ms=60
@@ -83,6 +101,16 @@ class TTSProvider(TTSProviderBase):
         while not self.conn.stop_event.is_set():
             try:
                 message = self.tts_text_queue.get(timeout=1)
+                if message.sentence_type == SentenceType.FIRST:
+                    self.current_sentence_id = message.sentence_id
+                    self.activity_bind_sentence(message.sentence_id)
+                if (
+                    self.conn.client_abort
+                    or message.sentence_id != self.conn.sentence_id
+                ):
+                    if message.sentence_type == SentenceType.FIRST:
+                        self.activity_abort_sentence(message.sentence_id)
+                    continue
                 if message.sentence_type == SentenceType.FIRST:
                     self.tts_stop_request = False
                     self.processed_chars = 0
@@ -142,13 +170,18 @@ class TTSProvider(TTSProviderBase):
         )
 
         try:
+            self.activity_tts_started(getattr(self, "current_sentence_id", None))
             self.pcm_buffer.clear()
-            self.tts_audio_queue.put((SentenceType.FIRST, [], text))
+            self.tts_audio_queue.put((
+                SentenceType.FIRST, [], text,
+                getattr(self, "current_sentence_id", None),
+            ))
 
             raw_pcm = bytearray()
-            for chunk in self.voice_obj.synthesize(text, syn_config=self.syn_config):
-                if chunk and chunk.audio_int16_bytes:
-                    raw_pcm.extend(chunk.audio_int16_bytes)
+            with self._voice_lock:
+                for chunk in self.voice_obj.synthesize(text, syn_config=self.syn_config):
+                    if chunk and chunk.audio_int16_bytes:
+                        raw_pcm.extend(chunk.audio_int16_bytes)
 
             if not raw_pcm:
                 logger.bind(tag=TAG).warning(
@@ -188,7 +221,11 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(
                 f"Piper synth exception for {text!r}: {e}"
             )
-            self.tts_audio_queue.put((SentenceType.LAST, [], None))
+            self.activity_tts_failed(getattr(self, "current_sentence_id", None), e)
+            self.tts_audio_queue.put((
+                SentenceType.LAST, [], None,
+                getattr(self, "current_sentence_id", None),
+            ))
 
     async def close(self):
         await super().close()

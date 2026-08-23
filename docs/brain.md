@@ -9,7 +9,7 @@ description: The pi agent runtime (dotty-pi container), the model matrix, and th
 
 - The "brain" is the **`dotty-pi` Docker container** running the pi coding agent with the `dotty-pi-ext` extension.
 - **`PiVoiceLLM`** (the default xiaozhi LLM provider) translates each voice turn into a pi RPC request via `docker exec -i dotty-pi pi --mode rpc`. TTS-bound text streams back to xiaozhi-server; tool dispatch happens entirely inside the container.
-- The `dotty-pi-ext` extension exposes **seven voice tools** to the agent loop: `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`.
+- The `dotty-pi-ext` extension exposes **eight native voice tools** to the agent loop: `device_status`, `memory_lookup`, `recall_person`, `remember`, `remember_person`, `think_hard`, `take_photo`, `play_song`. A separate fail-closed allowlist can add private external MCP tools; see [external-mcp.md](./external-mcp.md).
 - **Which LLM runs which turn:** the pi outer loop targets `qwen3.5:4b` (local llama-swap, ~500 ms warm); `think_hard` escalates directly to `qwen3.6:27b-think` (co-resident on llama-swap). **Smart-mode does NOT swap the backend model on the live `PiVoiceLLM` path** — it flips ambient/behaviour only; the inner-loop model-swap is v2 scope and not wired. (Instant in-process model-swap existed only on the now-removed `Tier1Slim` provider.)
 - One documented alternate voice provider exists: **`OpenAICompat`** (points straight at any OpenAI-compatible endpoint; stateless, no voice tools). See [llm-backends.md](./llm-backends.md).
 
@@ -39,7 +39,7 @@ The runtime contract:
 2. **PiClient** runs `docker exec -i dotty-pi pi --mode rpc` — JSONL messages over stdin/stdout.
 3. **pi** runs the prompt against llama-swap (`qwen3.5:4b` by default) with the `dotty-pi-ext` extension loaded.
 4. Thinking deltas and extension UI requests are filtered by PiClient; only TTS-bound text chunks reach xiaozhi-server.
-5. `PiVoiceLLM` holds one long-lived `PiClient`; between turns it issues `new_session` to reset pi's working state without re-spawning the process.
+5. `PiVoiceLLM` holds one long-lived `PiClient`; turns with the same xiaozhi `session_id` share pi's working context. A changed session ID issues `new_session` to clear context without re-spawning the process; ID-less integrations fall back to the 120-second idle boundary.
 
 Appdata layout on the Docker host:
 
@@ -55,12 +55,13 @@ Appdata layout on the Docker host:
     └── dotty-pi-ext/        # voice-tool extension
 ```
 
-### dotty-pi-ext — the seven voice tools
+### dotty-pi-ext — the eight native voice tools
 
 `dotty-pi-ext` is the pi extension that exposes Dotty's voice tools to the agent loop. Installed inside the container at `/root/.pi/extensions/dotty-pi-ext/`.
 
 | Tool | What it does |
 |---|---|
+| `device_status()` | Correlated read of the firmware's current speaker, battery, screen, and network status. |
 | `memory_lookup(query)` | FTS5 search against `brain.db`; returns top-3 snippets, ≤200 chars each. |
 | `recall_person(name)` | Retrieves approved memory facts for a named household member. |
 | `remember(fact)` | Stores a durable fact (≤300 codepoints) into `brain.db` with `category=core`, `importance=0.7`. |
@@ -106,7 +107,7 @@ not have a deterministic output validator.
 
 ### qwen3.5:4b (pi outer agent loop)
 
-Local on llama-swap (dual RTX 3060). Fast: ~500 ms warm round-trip including TTS dispatch. Trained for tool calling, which is what lets the seven-tool catalogue work at 4 B parameters. See the dotty-pi-ext tool table above.
+Local on llama-swap (dual RTX 3060). Fast: ~500 ms warm round-trip including TTS dispatch. Trained for tool calling, which is what lets the curated tool catalogue work at 4 B parameters. See the dotty-pi-ext tool table above.
 
 ### qwen3.6:27b-think (think_hard target)
 

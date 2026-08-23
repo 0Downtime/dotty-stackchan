@@ -79,7 +79,7 @@ It depends on the provider. `OpenAICompat` loads its configured Markdown persona
 
 Depends on which TTS provider you use:
 
-- **Piper TTS (local):** browse the [piper-voices catalog](https://huggingface.co/rhasspy/piper-voices) on HuggingFace. Dozens of languages and speakers. The reference config uses `en_GB-cori-medium`.
+- **Piper TTS (local):** browse the [piper-voices catalog](https://huggingface.co/rhasspy/piper-voices) on HuggingFace. Dozens of languages and speakers. The reference config uses `en_US-kristin-medium`, a cheerful voice suited to Kid Mode.
 - **EdgeTTS (cloud):** any Microsoft Edge Neural voice. Hundreds of voices across 70+ languages. Set the voice ID in `data/.config.yaml` under `TTS.EdgeTTS.voice` (e.g., `en-US-AvaNeural`, `en-AU-WilliamNeural`, `ja-JP-NanamiNeural`). Restart the container after changing.
 
 To switch between Piper and EdgeTTS, change the `selected_module` for TTS in `data/.config.yaml` and restart the container.

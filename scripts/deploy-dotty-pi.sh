@@ -11,20 +11,20 @@
 # dotty-pi is unlike the other two services in three ways, all handled below:
 #   1. THREE destinations, not one:
 #        - build context (Dockerfile + docker-compose.yml) → $SRC_DIR
-#        - config (models.json)                            → $STATE_DIR/agent/
-#        - extension source (dotty-pi-ext/)                → $STATE_DIR/extensions/dotty-pi-ext/
-#   2. The extension carries a hand-compiled native module (better-sqlite3) in
-#      node_modules/ that is NOT in git. We refresh the SOURCE and PRESERVE the
-#      existing node_modules — deps are unchanged and node stays the same major
-#      (same C++ ABI), so no `npm ci`/native rebuild inside Alpine is needed.
+#        - config (models.json + mcp.json)                 → $STATE_DIR/agent/
+#        - locked extension unit (source + node_modules)   → $STATE_DIR/extensions/dotty-pi-ext/
+#   2. The extension carries native modules. A pinned Node Alpine builder runs
+#      `npm ci` and all extension tests in a staging directory. The complete
+#      staged directory is then renamed atomically; stale live node_modules are
+#      never preserved across a dependency change.
 #   3. No HTTP healthcheck — we exec `pi --version` and assert the extension
 #      tool files landed. A functional voice-tool smoke test is a MANUAL
 #      post-deploy step (see end of script): a real RPC turn must target
 #      qwen3.5:4b only — qwen3.6:27b evicts the resident voice pair (a 30-50s
 #      cold reload), per dotty-pi/README.md.
 #
-# HARD GUARD: this script writes ONLY to $SRC_DIR, $STATE_DIR/agent/models.json,
-# and $STATE_DIR/extensions/dotty-pi-ext/. It NEVER touches $STATE_DIR/memory/
+# HARD GUARD: this script writes ONLY to $SRC_DIR, repo-owned config files in
+# $STATE_DIR/agent/, and $STATE_DIR/extensions/. It NEVER touches $STATE_DIR/memory/
 # (the live brain.db), $STATE_DIR/persona/, $STATE_DIR/agent/auth.json, or
 # $STATE_DIR/agent/sessions/ — those are live migrated state.
 #
@@ -56,9 +56,9 @@ cd "$(git rev-parse --show-toplevel)"
 #    node_modules / in-progress edits are skipped. node_modules is gitignored,
 #    so the extension set is pure source.
 CTX_FILES=(dotty-pi/Dockerfile dotty-pi/docker-compose.yml)
-CFG_FILE=dotty-pi/models.json
+CFG_FILES=(dotty-pi/models.json dotty-pi-ext/config/mcp.json)
 mapfile -t EXT_FILES < <(git ls-tree -r --name-only HEAD dotty-pi-ext/)
-for f in "${CTX_FILES[@]}" "$CFG_FILE"; do
+for f in "${CTX_FILES[@]}" "${CFG_FILES[@]}"; do
     [[ -f "$f" ]] || { echo "ERROR: missing tracked file $f" >&2; exit 1; }
 done
 if [[ ${#EXT_FILES[@]} -eq 0 ]]; then
@@ -66,21 +66,17 @@ if [[ ${#EXT_FILES[@]} -eq 0 ]]; then
     exit 1
 fi
 DEPLOY_SHA="$(git rev-parse --short HEAD)"
-echo "Deploy set: ${#CTX_FILES[@]} context + 1 config + ${#EXT_FILES[@]} extension files (HEAD $DEPLOY_SHA)"
+echo "Deploy set: ${#CTX_FILES[@]} context + ${#CFG_FILES[@]} config + ${#EXT_FILES[@]} extension files (HEAD $DEPLOY_SHA)"
 
 # 2. SSH preflight — fail fast on bad creds.
 ssh -o BatchMode=yes -o ConnectTimeout=5 "$DOTTY_PI_HOST" true \
     || { echo "ERROR: ssh preflight failed for $DOTTY_PI_HOST" >&2; exit 1; }
 
-# 3. Pre-deploy snapshot of the WHOLE state tree (brain.db + persona + old
-#    extension). Rollback insurance. Keep last 3.
+# 3. Prepare only the owned deployment roots. Protected state is neither moved
+#    nor copied by this script.
 ssh "$DOTTY_PI_HOST" "
     set -euo pipefail
-    if [ -d $STATE_DIR ]; then
-        cp -a $STATE_DIR ${STATE_DIR}.bak-deploy-$TS
-        sh -c 'ls -1dt ${STATE_DIR}.bak-deploy-* 2>/dev/null | tail -n +4 | xargs -r rm -rf' || true
-    fi
-    mkdir -p $SRC_DIR $STATE_DIR/agent $STATE_DIR/extensions/dotty-pi-ext
+    mkdir -p $SRC_DIR $STATE_DIR/agent $STATE_DIR/extensions
 "
 
 # 4. Pack the two tarballs locally.
@@ -89,13 +85,13 @@ ssh "$DOTTY_PI_HOST" "
 tar -czf "$CTX_TGZ" "${CTX_FILES[@]}"
 tar -czf "$EXT_TGZ" "${EXT_FILES[@]}"
 
-# 5. Ship + place each destination.
+# 5. Ship the immutable candidates. Nothing live is replaced yet.
 #    5a. Build context → $SRC_DIR (strip the dotty-pi/ segment).
 cat "$CTX_TGZ" | ssh "$DOTTY_PI_HOST" "cat > /tmp/dotty-pi-ctx.tgz"
-#    5b. models.json → $STATE_DIR/agent/ (single file; repo-owned config).
-cat "$CFG_FILE" | ssh "$DOTTY_PI_HOST" "cat > $STATE_DIR/agent/models.json"
-#    5c. Extension → $STATE_DIR/extensions/dotty-pi-ext/ (clean-replace,
-#        preserving node_modules so the compiled better-sqlite3 survives).
+#    5b. Repo-owned configs → temporary same-directory candidates.
+cat dotty-pi/models.json | ssh "$DOTTY_PI_HOST" "cat > $STATE_DIR/agent/.models.json.stage-$TS"
+cat dotty-pi-ext/config/mcp.json | ssh "$DOTTY_PI_HOST" "cat > $STATE_DIR/agent/.mcp.json.stage-$TS"
+#    5c. Extension source → a timestamped staging directory.
 cat "$EXT_TGZ" | ssh "$DOTTY_PI_HOST" "cat > /tmp/dotty-pi-ext.tgz"
 
 ssh "$DOTTY_PI_HOST" "
@@ -103,18 +99,26 @@ ssh "$DOTTY_PI_HOST" "
     # build context
     tar -xzf /tmp/dotty-pi-ctx.tgz -C $SRC_DIR --strip-components=1
     rm -f /tmp/dotty-pi-ctx.tgz
-    # extension: remove everything EXCEPT node_modules, then extract fresh
-    # source. This drops orphaned spike files (e.g. stale set_led) while
-    # keeping the hand-compiled native module.
-    find $STATE_DIR/extensions/dotty-pi-ext -mindepth 1 -maxdepth 1 \
-        ! -name node_modules -exec rm -rf {} +
-    tar -xzf /tmp/dotty-pi-ext.tgz -C $STATE_DIR/extensions/dotty-pi-ext --strip-components=1
+    STAGE=$STATE_DIR/extensions/.dotty-pi-ext.stage-$TS
+    if [ -e \"\$STAGE\" ]; then
+        echo 'ERROR: extension staging path already exists' >&2
+        exit 1
+    fi
+    mkdir \"\$STAGE\"
+    tar -xzf /tmp/dotty-pi-ext.tgz -C \"\$STAGE\" --strip-components=1
     rm -f /tmp/dotty-pi-ext.tgz
+    docker run --rm -v \"\$STAGE:/work\" -w /work node:25.9-alpine3.23 sh -ceu '
+        apk add --no-cache python3 make g++ >/dev/null
+        npm ci
+        npm test
+        npm ls pi-mcp-adapter@2.13.0 --depth=0
+        npm ls @earendil-works/pi-coding-agent@0.74.0 --depth=0
+    '
 "
 
-# 6. Build the pinned image + recreate. Repo compose has no build: directive,
-#    so build then up (like the sibling scripts). The previous image (e.g.
-#    dotty-pi:spike) is left in place as a rollback target.
+# 6. Build first, then atomically swap the staged extension and config files.
+#    A remote error trap restores the previous extension/config before returning
+#    failure. The previous image remains available as an operator rollback.
 #
 #    `docker rm -f dotty-pi` first: the old container was created by compose
 #    from $STATE_DIR (a different compose project than $SRC_DIR), but the
@@ -125,16 +129,47 @@ ssh "$DOTTY_PI_HOST" "
 ssh "$DOTTY_PI_HOST" "
     set -euo pipefail
     docker build -t $IMAGE_TAG $SRC_DIR
+    LIVE=$STATE_DIR/extensions/dotty-pi-ext
+    STAGE=$STATE_DIR/extensions/.dotty-pi-ext.stage-$TS
+    PREV=$STATE_DIR/extensions/.dotty-pi-ext.prev-$TS
+    FAILED=$STATE_DIR/extensions/.dotty-pi-ext.failed-$TS
+    SWAPPED=0
+    rollback() {
+        status=\$?
+        trap - ERR
+        if [ \"\$SWAPPED\" -eq 1 ]; then
+            docker rm -f dotty-pi >/dev/null 2>&1 || true
+            if [ -d \"\$LIVE\" ]; then mv \"\$LIVE\" \"\$FAILED\"; fi
+            if [ -d \"\$PREV\" ]; then mv \"\$PREV\" \"\$LIVE\"; fi
+            if [ -f $STATE_DIR/agent/.models.json.prev-$TS ]; then
+                mv $STATE_DIR/agent/.models.json.prev-$TS $STATE_DIR/agent/models.json
+            fi
+            if [ -f $STATE_DIR/agent/.mcp.json.prev-$TS ]; then
+                mv $STATE_DIR/agent/.mcp.json.prev-$TS $STATE_DIR/agent/mcp.json
+            fi
+            cd $SRC_DIR
+            docker compose up -d || true
+        fi
+        exit \$status
+    }
+    trap rollback ERR
+
+    if [ -f $STATE_DIR/agent/models.json ]; then
+        cp -a $STATE_DIR/agent/models.json $STATE_DIR/agent/.models.json.prev-$TS
+    fi
+    if [ -f $STATE_DIR/agent/mcp.json ]; then
+        cp -a $STATE_DIR/agent/mcp.json $STATE_DIR/agent/.mcp.json.prev-$TS
+    fi
+    if [ -d \"\$LIVE\" ]; then mv \"\$LIVE\" \"\$PREV\"; fi
+    mv \"\$STAGE\" \"\$LIVE\"
+    SWAPPED=1
+    chmod 600 $STATE_DIR/agent/.mcp.json.stage-$TS
+    mv $STATE_DIR/agent/.models.json.stage-$TS $STATE_DIR/agent/models.json
+    mv $STATE_DIR/agent/.mcp.json.stage-$TS $STATE_DIR/agent/mcp.json
     docker rm -f dotty-pi 2>/dev/null || true
     cd $SRC_DIR
     docker compose up -d
-"
 
-# 7. Healthcheck — no HTTP endpoint. Assert the container is up, pi runs in the
-#    new image, and the extension's tool source landed. (Functional voice-tool
-#    smoke is a manual step — see the note printed at the end.)
-ssh "$DOTTY_PI_HOST" "
-    set -euo pipefail
     DEADLINE=\$((\$(date +%s) + 30))
     while [ \$(date +%s) -lt \$DEADLINE ]; do
         if docker exec dotty-pi pi --version >/dev/null 2>&1; then
@@ -149,20 +184,27 @@ ssh "$DOTTY_PI_HOST" "
         exit 1
     fi
     MISSING=0
-    for t in memory_lookup remember recall_person remember_person think_hard take_photo play_song; do
+    for t in device_status memory_lookup remember recall_person remember_person think_hard take_photo play_song; do
         if [ ! -f $STATE_DIR/extensions/dotty-pi-ext/src/tools/\$t.ts ]; then
             echo \"ERROR: missing tool source: \$t.ts\" >&2; MISSING=1
         fi
     done
     [ \$MISSING -eq 0 ] || exit 1
-    echo 'Extension: all 7 tool sources present.'
+    [ -f \"\$LIVE/src/mcp/external_mcp.ts\" ]
+    [ -f \"\$LIVE/src/policy/ha_confirmation.ts\" ]
+    [ -f $STATE_DIR/agent/mcp.json ]
+    docker exec -w /root/.pi/extensions/dotty-pi-ext dotty-pi npm ls --depth=0
+    docker exec dotty-pi pi --version | grep -Fq 0.74.0
+    echo 'Extension: eight native tools, MCP adapter, and confirmation policy present.'
+    SWAPPED=0
+    trap - ERR
 "
 
 # 8. md5 round-trip on every shipped file, path-mapped per destination.
 ctx_local="$(md5sum "${CTX_FILES[@]}" | sed 's|dotty-pi/||' | sort -k2)"
 ctx_remote="$(ssh "$DOTTY_PI_HOST" "cd $SRC_DIR && md5sum Dockerfile docker-compose.yml" | sort -k2)"
-cfg_local="$(md5sum "$CFG_FILE" | sed 's|dotty-pi/||' | sort -k2)"
-cfg_remote="$(ssh "$DOTTY_PI_HOST" "cd $STATE_DIR/agent && md5sum models.json" | sort -k2)"
+cfg_local="$(md5sum "${CFG_FILES[@]}" | sed -E 's|dotty-pi(-ext/config)?/||' | sort -k2)"
+cfg_remote="$(ssh "$DOTTY_PI_HOST" "cd $STATE_DIR/agent && md5sum models.json mcp.json" | sort -k2)"
 ext_local="$(md5sum "${EXT_FILES[@]}" | sed 's|dotty-pi-ext/||' | sort -k2)"
 ext_remote_list="$(printf '%q ' "${EXT_FILES[@]/#dotty-pi-ext\//}")"
 ext_remote="$(ssh "$DOTTY_PI_HOST" "cd $STATE_DIR/extensions/dotty-pi-ext && md5sum $ext_remote_list" | sort -k2)"
