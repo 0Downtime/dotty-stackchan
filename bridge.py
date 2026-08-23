@@ -722,6 +722,55 @@ if _configure_dashboard is not None:
         ok = await _dispatch_set_state("", state)
         return {"ok": ok}
 
+    async def _dashboard_tts_provider_get() -> dict:
+        """Read the non-secret TTS provider state from xiaozhi-server."""
+        if not _XIAOZHI_HOST:
+            return {"ok": False, "error": "XIAOZHI_HOST not set"}
+        url = f"http://{_XIAOZHI_HOST}:{_XIAOZHI_HTTP_PORT}/xiaozhi/admin/tts-provider"
+
+        def _get() -> dict:
+            try:
+                response = requests.get(
+                    url, headers=_xiaozhi_admin_headers(), timeout=3
+                )
+                data = response.json()
+                if response.status_code == 200:
+                    return {"ok": True, **data}
+                return {"ok": False, "error": f"HTTP {response.status_code}"}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return await asyncio.to_thread(_get)
+
+    async def _dashboard_tts_provider_set(provider: str) -> dict:
+        """Switch TTS through the authenticated xiaozhi admin surface."""
+        if not _XIAOZHI_HOST:
+            return {"ok": False, "error": "XIAOZHI_HOST not set"}
+        url = f"http://{_XIAOZHI_HOST}:{_XIAOZHI_HTTP_PORT}/xiaozhi/admin/tts-provider"
+
+        def _post() -> dict:
+            try:
+                response = requests.post(
+                    url,
+                    json={"provider": provider},
+                    headers=_xiaozhi_admin_headers(),
+                    timeout=3,
+                )
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                if response.status_code == 200:
+                    return {"ok": True, **data}
+                return {
+                    "ok": False,
+                    "error": data.get("error") or f"HTTP {response.status_code}",
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return await asyncio.to_thread(_post)
+
     async def _dashboard_set_smart_mode(enabled: bool) -> dict:
         """Persist smart_mode + push the firmware LED pip. On the live
         PiVoiceLLM path there is no backend model swap (v2 scope) — the
@@ -760,6 +809,8 @@ if _configure_dashboard is not None:
         kid_mode_setter=_dashboard_set_kid_mode,
         smart_mode_getter=_read_smart_mode,
         smart_mode_setter=_dashboard_set_smart_mode,
+        tts_provider_getter=_dashboard_tts_provider_get,
+        tts_provider_setter=_dashboard_tts_provider_set,
         state_getter=_dashboard_state_getter,
         state_setter=_dashboard_set_state,
         inject_to_device=_dashboard_inject_to_device,

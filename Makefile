@@ -3,9 +3,9 @@ SHELL := /bin/bash
 
 # ── Model URLs ───────────────────────────────────────────────────────
 SENSEVOICE_REPO  := https://huggingface.co/FunAudioLLM/SenseVoiceSmall
-PIPER_BASE       := https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/medium
-PIPER_ONNX       := en_GB-cori-medium.onnx
-PIPER_JSON       := en_GB-cori-medium.onnx.json
+PIPER_BASE       := https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/kristin/medium
+PIPER_ONNX       := en_US-kristin-medium.onnx
+PIPER_JSON       := en_US-kristin-medium.onnx.json
 WHISPER_REPO     := https://huggingface.co/Systran/faster-whisper-small.en
 WHISPER_DIR      := models/whisper-small.en-ct2
 WHISPER_FILES    := config.json model.bin tokenizer.json vocabulary.txt

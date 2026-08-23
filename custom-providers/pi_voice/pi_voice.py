@@ -125,6 +125,10 @@ def _session_idle_timeout_seconds(config: dict) -> float:
     Xiaozhi's voice connection defaults to a 120-second no-speech timeout.
     Matching that value keeps ID-less integrations useful without allowing
     their working context to survive indefinitely.
+    """Return the idle boundary between conversational sessions.
+
+    The xiaozhi session ID remains the authoritative boundary when it changes;
+    the timeout also prevents a quiet, unchanged connection from living forever.
     """
     raw = config.get(
         "session_idle_timeout_seconds",
@@ -210,6 +214,7 @@ _VOICE_TOOL_ROUTING = (
     "home_assistant_GetLiveContext for selected live home sensor questions; "
     "and home_assistant_HassTurnOn or home_assistant_HassTurnOff only for one "
     "specifically named light. Call the "
+    "think_hard for precise math, technical, or factual reasoning. Call the "
     "matching tool first and base the spoken answer on its result. For greetings, "
     "opinions, simple conversation, or general knowledge you already know, answer "
     "without a tool. Never substitute file, shell, or coding tools. If no "
@@ -340,6 +345,7 @@ def _ha_confirmation_prompt(tool_event: dict) -> str | None:
         f'Turn {action} {friendly}? Say "Confirm {action} {friendly}" '
         "within 15 seconds."
     )
+    return prompt
 
 
 def _enforce_leading_emoji(chunks: Iterator[str]) -> Iterator[str]:
@@ -434,6 +440,8 @@ class LLMProvider(LLMProviderBase):
         # integration omits the ID, fall back to xiaozhi's no-speech timeout.
         normalized_session_id = str(session_id or "").strip() or None
         self._turn_sequence += 1
+        # The same session is retained until it changes or exceeds the idle
+        # boundary below.
         live_device_status = _fetch_live_device_status(user_text)
         prompt = _wrap_with_sandwich(
             user_text,
@@ -459,6 +467,11 @@ class LLMProvider(LLMProviderBase):
                 and now - self._last_turn_at >= self._session_idle_timeout
             ):
                 reset_reason = "id-less session idle timeout"
+            if reset_reason is None and (
+                self._last_turn_at is not None
+                and now - self._last_turn_at >= self._session_idle_timeout
+            ):
+                reset_reason = "conversation idle timeout"
         if reset_reason is not None:
             try:
                 self._client.new_session()

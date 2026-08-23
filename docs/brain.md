@@ -39,7 +39,7 @@ The runtime contract:
 2. **PiClient** runs `docker exec -i dotty-pi pi --mode rpc` — JSONL messages over stdin/stdout.
 3. **pi** runs the prompt against llama-swap (`qwen3.5:4b` by default) with the `dotty-pi-ext` extension loaded.
 4. Thinking deltas and extension UI requests are filtered by PiClient; only TTS-bound text chunks reach xiaozhi-server.
-5. `PiVoiceLLM` holds one long-lived `PiClient`; between turns it issues `new_session` to reset pi's working state without re-spawning the process.
+5. `PiVoiceLLM` holds one long-lived `PiClient`; turns with the same xiaozhi `session_id` share pi's working context. A changed session ID issues `new_session` to clear context without re-spawning the process; ID-less integrations fall back to the 120-second idle boundary.
 
 Appdata layout on the Docker host:
 

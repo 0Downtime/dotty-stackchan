@@ -32,7 +32,7 @@ source-of-truth for re-verification.
 | FunASR project | https://github.com/modelscope/FunASR | Toolkit that hosts SenseVoice. |
 | Silero VAD | https://github.com/snakers4/silero-vad | VAD tunables, version history, limitations. |
 | Piper TTS (engine) | https://github.com/rhasspy/piper | Local neural TTS. |
-| rhasspy/piper-voices | https://huggingface.co/rhasspy/piper-voices | Voice catalog (includes `en_GB-cori-medium`). Repo license MIT; individual voices carry their own. |
+| rhasspy/piper-voices | https://huggingface.co/rhasspy/piper-voices | Voice catalog (includes `en_US-kristin-medium`). Repo license MIT; individual voices carry their own. |
 | rany2/edge-tts | https://github.com/rany2/edge-tts | Unofficial EdgeTTS library — the technique we use, not the official path. |
 
 <a id="brain"></a>
@@ -73,7 +73,7 @@ OpenRouter pricing changes often — values below are most recently observed per
 | FunASR / SenseVoiceSmall | Check the HF card | Weights license varies. |
 | SileroVAD | MIT | — |
 | Piper engine | MIT | — |
-| Piper voices | MIT repo, per-voice varies | `en_GB-cori-medium` license — verify before redistributing your robot's outputs. |
+| Piper voices | MIT repo, per-voice varies | `en_US-kristin-medium` license — verify before redistributing your robot's outputs. |
 | EdgeTTS | N/A — reverse-engineered | Microsoft can cut it off at any time. No support. |
 | xiaozhi-esp32 firmware | See repo | Modify and redistribute per upstream. |
 | xiaozhi-esp32-server | See repo | Same. |

@@ -61,7 +61,7 @@ Features xiaozhi-esp32-server supports upstream that aren't turned on or surface
 | Capability | What it unlocks | Priority | Cross-ref |
 |---|---|---|---|
 | **Streaming first-token to TTS** | First-token TTS instead of waiting for the full response (perceived-latency win) | **High** | `ROADMAP.md` → "Reduce first-audio latency" |
-| **Long-lived pi agent sessions** | Carry context across turns within a conversation without re-loading the persona each time | Medium | `ROADMAP.md` → "Reduce first-audio latency" |
+| ~~**Long-lived pi agent sessions**~~ | **Wired up.** Turns sharing a xiaozhi `session_id` retain pi working context; new sessions reset it without re-spawning. | Done | — |
 | **Tool pre-approval gate** | Bridge confirms tool calls before they execute — useful for child-safety. | Medium | `ROADMAP.md` → "Lock down for child-safe operation" |
 | ~~**Tool-use**~~ | **Wired up.** The `dotty-pi-ext` extension exposes 5 voice tools (`memory_lookup`, `remember`, `think_hard`, `take_photo`, `play_song`). | Done | — |
 | **pi agent MCP-server mode** | Expose the agent's tools/memory to other MCP clients | Low | **New-task candidate** |

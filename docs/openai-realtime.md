@@ -82,6 +82,12 @@ Codex authentication stays in a dedicated named volume that is never mounted
 into Xiaozhi. Keep the broker token in the deployment secret file and treat the
 auth volume like a password.
 
+The broker pins `gpt-5.6-luna` with high reasoning effort. This keeps the
+ordinary voice path responsive while giving current-information lookups a
+separate research pass. Each request is instructed to use exactly one search,
+skip result-page follow-ups, and return fewer than 120 words with at most two
+sources so voice lookups do not silently expand into long research runs.
+
 Input transcription is optional and is separate from the model's ability to
 understand microphone audio. Set `DOTTY_REALTIME_TRANSCRIPTION_MODEL=` to omit
 the transcript stream when that model is unavailable or has a lower rate

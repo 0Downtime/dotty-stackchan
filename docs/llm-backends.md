@@ -240,6 +240,8 @@ LLM:
   PiVoiceLLM:
     type: pi_voice
     container_name: dotty-pi
+    # Fresh conversation after 15 minutes without a user turn.
+    session_idle_timeout_seconds: 900
 ```
 
 ### Notes

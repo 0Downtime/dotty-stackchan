@@ -169,7 +169,6 @@ class TestSandwichInjection(unittest.TestCase):
         fetch.assert_called_once_with("Check your current volume")
         self.assertIn('"volume":70', client.prompts[0])
         self.assertEqual("".join(output), "😊 Volume is 70 percent.")
-
     def test_current_stackchan_identity_overrides_earlier_persona(self):
         wrapped = _wrap_with_sandwich("What is your name?", False)
         self.assertIn("Your name is StackChan", wrapped)
@@ -316,6 +315,17 @@ class TestNewSessionLifecycle(unittest.TestCase):
             client.new_session_calls, 1,
             "first turn after disconnect starts from already-reset Pi state",
         )
+    def test_same_xiaozhi_session_resets_after_conversation_idle_timeout(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider(
+            {"session_idle_timeout_seconds": 900}, client=client,
+        )  # type: ignore[arg-type]
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 1000.0)):
+            list(provider.response("same-session", [{"role": "user", "content": "a"}]))
+            list(provider.response("same-session", [{"role": "user", "content": "b"}]))
+        self.assertEqual(client.new_session_calls, 1)
 
     def test_missing_session_id_does_not_inherit_known_session(self):
         client = FakeClient()
@@ -415,8 +425,6 @@ class TestNewSessionLifecycle(unittest.TestCase):
         self.assertEqual(client.max_active, 1)
         self.assertEqual(len(outputs), 2)
         self.assertEqual(client.new_session_calls, 0)
-
-
 class TestHomeAssistantConfirmationSpeech(unittest.TestCase):
     def test_blocked_first_write_uses_exact_non_model_confirmation_sentence(self):
         client = FakeClient()

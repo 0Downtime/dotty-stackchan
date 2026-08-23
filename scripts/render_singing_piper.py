@@ -142,7 +142,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default="/opt/xiaozhi-esp32-server/models/piper/en_GB-cori-medium.onnx",
+        default="/opt/xiaozhi-esp32-server/models/piper/en_US-kristin-medium.onnx",
         help="Path to Piper .onnx voice model",
     )
     parser.add_argument(

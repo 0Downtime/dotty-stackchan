@@ -1,5 +1,6 @@
 import asyncio
 import json as _json_mod
+import signal as _signal_mod
 from aiohttp import ClientSession, ClientTimeout, web
 from config.logger import setup_logging
 from core.api.ota_handler import OTAHandler
@@ -119,6 +120,57 @@ def _dotty_resolve_conn(device_id: str):
             status=503,
         )
     return conn, None
+
+
+# DOTTY-PATCH: TTS provider selection is persisted separately from the
+# read-only Xiaozhi YAML. The bridge calls this authenticated endpoint; the
+# server writes the small state atomically and restarts only its own process.
+_TTS_PROVIDER_VALUES = {"local_piper", "openai_tts"}
+
+
+def _dotty_tts_state_file() -> str:
+    return _os_mod.environ.get(
+        "DOTTY_TTS_STATE_FILE",
+        "/var/lib/dotty-bridge/tts/provider",
+    ).strip()
+
+
+def _dotty_read_tts_provider() -> str:
+    try:
+        value = _os_mod.path.realpath(_dotty_tts_state_file())
+        with open(value, encoding="utf-8") as handle:
+            provider = handle.read().strip().lower()
+    except OSError:
+        return "local_piper"
+    return provider if provider in _TTS_PROVIDER_VALUES else "local_piper"
+
+
+def _dotty_write_tts_provider(provider: str) -> None:
+    path = _dotty_tts_state_file()
+    parent = _os_mod.path.dirname(path)
+    if not parent:
+        raise OSError("DOTTY_TTS_STATE_FILE must include a parent directory")
+    _os_mod.makedirs(parent, mode=0o750, exist_ok=True)
+    temporary = f"{path}.tmp.{_os_mod.getpid()}"
+    try:
+        fd = _os_mod.open(temporary, _os_mod.O_WRONLY | _os_mod.O_CREAT | _os_mod.O_TRUNC, 0o640)
+        with _os_mod.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(provider + "\n")
+            handle.flush()
+            _os_mod.fsync(handle.fileno())
+        _os_mod.replace(temporary, path)
+    finally:
+        try:
+            _os_mod.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _dotty_openai_tts_configured() -> bool:
+    return bool(
+        _os_mod.environ.get("OPENAI_TTS_API_KEY", "").strip()
+        or _os_mod.environ.get("OPENAI_API_KEY", "").strip()
+    )
 
 
 def _dotty_conn_device_id(conn, fallback: str = "") -> str:
@@ -778,6 +830,65 @@ class SimpleHttpServer:
         return web.json_response({
             "ok": True, "device_id": resolved_id, "sentence_id": sentence_id,
         })
+
+    async def _dotty_get_tts_provider(self, request: "web.Request") -> "web.Response":
+        """GET /xiaozhi/admin/tts-provider.
+
+        Returns provider state and non-secret OpenAI readiness only.
+        """
+        return web.json_response({
+            "ok": True,
+            "provider": _dotty_read_tts_provider(),
+            "openai_configured": _dotty_openai_tts_configured(),
+        })
+
+    async def _dotty_set_tts_provider(self, request: "web.Request") -> "web.Response":
+        """POST /xiaozhi/admin/tts-provider.
+
+        Body: {"provider": "local_piper" | "openai_tts"}
+
+        The provider state is committed atomically before a delayed SIGTERM.
+        Docker's existing ``restart: unless-stopped`` policy brings back only
+        xiaozhi-server, leaving the dashboard, behaviour service, and host up.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        provider = (data.get("provider") or "").strip().lower()
+        if provider not in _TTS_PROVIDER_VALUES:
+            return web.json_response(
+                {"error": "provider must be local_piper or openai_tts"},
+                status=400,
+            )
+        if provider == "openai_tts" and not _dotty_openai_tts_configured():
+            return web.json_response(
+                {"error": "OPENAI_TTS_API_KEY is not configured"},
+                status=503,
+            )
+        try:
+            _dotty_write_tts_provider(provider)
+        except OSError as exc:
+            self.logger.bind(tag=TAG).error(
+                f"TTS provider state write failed: {type(exc).__name__}"
+            )
+            return web.json_response(
+                {"error": "TTS provider state is not writable"}, status=503
+            )
+
+        async def _restart_after_response():
+            await asyncio.sleep(0.25)
+            self.logger.bind(tag=TAG).info(
+                f"TTS provider switched to {provider}; restarting xiaozhi process"
+            )
+            _os_mod.kill(_os_mod.getpid(), _signal_mod.SIGTERM)
+
+        _spawn(_restart_after_response(), name="tts_provider_restart")
+        return web.json_response({
+            "ok": True,
+            "provider": provider,
+            "restart_scheduled": True,
+        })
     # END DOTTY-PATCH --------------------------------------------------------
 
     async def start(self):
@@ -872,6 +983,14 @@ class SimpleHttpServer:
                         web.get(
                             "/xiaozhi/admin/songs",
                             self._dotty_list_songs,
+                        ),
+                        web.get(
+                            "/xiaozhi/admin/tts-provider",
+                            self._dotty_get_tts_provider,
+                        ),
+                        web.post(
+                            "/xiaozhi/admin/tts-provider",
+                            self._dotty_set_tts_provider,
                         ),
                         web.post(
                             "/xiaozhi/admin/say",

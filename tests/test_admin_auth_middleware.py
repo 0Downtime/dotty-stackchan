@@ -11,6 +11,7 @@ import importlib.util as _ilu
 import os
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock
 
@@ -122,6 +123,38 @@ class AdminAuthMiddlewareTests(unittest.TestCase):
     def test_set_token_does_not_gate_vision(self):
         os.environ["DOTTY_ADMIN_TOKEN"] = "s3cret"
         self.assertIs(_run(_Req("/mcp/vision/explain")), _SENTINEL)
+
+
+class TTSProviderStateTests(unittest.TestCase):
+    def test_missing_or_invalid_state_defaults_to_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "provider"
+            previous = os.environ.get("DOTTY_TTS_STATE_FILE")
+            try:
+                os.environ["DOTTY_TTS_STATE_FILE"] = str(path)
+                self.assertEqual(_mod._dotty_read_tts_provider(), "local_piper")
+                path.write_text("not-a-provider\n", encoding="utf-8")
+                self.assertEqual(_mod._dotty_read_tts_provider(), "local_piper")
+            finally:
+                if previous is None:
+                    os.environ.pop("DOTTY_TTS_STATE_FILE", None)
+                else:
+                    os.environ["DOTTY_TTS_STATE_FILE"] = previous
+
+    def test_provider_state_write_is_atomic_and_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "nested" / "provider"
+            previous = os.environ.get("DOTTY_TTS_STATE_FILE")
+            try:
+                os.environ["DOTTY_TTS_STATE_FILE"] = str(path)
+                _mod._dotty_write_tts_provider("openai_tts")
+                self.assertEqual(_mod._dotty_read_tts_provider(), "openai_tts")
+                self.assertFalse(path.with_name("provider.tmp").exists())
+            finally:
+                if previous is None:
+                    os.environ.pop("DOTTY_TTS_STATE_FILE", None)
+                else:
+                    os.environ["DOTTY_TTS_STATE_FILE"] = previous
 
 
 if __name__ == "__main__":
