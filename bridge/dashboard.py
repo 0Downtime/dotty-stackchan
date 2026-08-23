@@ -27,6 +27,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from bridge.face_bundles import (
+    BUNDLE_BY_ID,
+    BUNDLES,
+    FaceBundle,
+    FaceBundleStore,
+    effective_voice_profile,
+    public_bundle,
+)
+
 log = logging.getLogger("dashboard")
 
 # Bridge wires its in-process message handler in via configure(). Lets the
@@ -291,12 +300,37 @@ XIAOZHI_HOST = os.environ.get("XIAOZHI_HOST", "")
 XIAOZHI_OTA_PORT = int(os.environ.get("XIAOZHI_OTA_PORT", "8003"))
 XIAOZHI_WS_PORT = int(os.environ.get("XIAOZHI_WS_PORT", "8000"))
 _ADMIN_TOKEN = os.environ.get("DOTTY_ADMIN_TOKEN", "").strip()
+_FACE_BUNDLE_STORE = FaceBundleStore()
 
 
 def _xiaozhi_admin_headers() -> dict[str, str]:
     """X-Admin-Token header for /xiaozhi/admin/* requests when DOTTY_ADMIN_TOKEN
     is set (matches the xiaozhi-server middleware); empty otherwise."""
     return {"X-Admin-Token": _ADMIN_TOKEN} if _ADMIN_TOKEN else {}
+
+
+def _realtime_available() -> bool:
+    enabled = os.environ.get("DOTTY_REALTIME_ENABLED", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    return enabled and bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+def _face_admin_request(method: str, endpoint: str, payload: dict | None = None) -> tuple[int, dict]:
+    if not XIAOZHI_HOST:
+        return 503, {"error": "xiaozhi-server is not configured"}
+    url = f"http://{XIAOZHI_HOST}:{XIAOZHI_OTA_PORT}/xiaozhi/admin/{endpoint}"
+    try:
+        response = requests.request(
+            method, url, json=payload, headers=_xiaozhi_admin_headers(), timeout=3,
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"error": response.text[:200] or f"HTTP {response.status_code}"}
+        return response.status_code, body
+    except requests.RequestException as exc:
+        return 503, {"error": f"xiaozhi-server unavailable: {type(exc).__name__}"}
 LOG_DIR = Path(os.environ.get("CONVO_LOG_DIR", "/var/lib/dotty-bridge/logs"))
 VOICE_CHANNELS = ("dotty", "stackchan")
 
@@ -931,6 +965,143 @@ async def kid_mode_partial(request: Request) -> Any:
         request, "kid_mode.html",
         {"enabled": enabled, "available": getter is not None},
     )
+
+
+def _face_bundle_context(device_id: str = "") -> dict[str, Any]:
+    record = _FACE_BUNDLE_STORE.get(device_id)
+    kid_getter = _state.get("kid_mode_getter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    effective, override_warning = effective_voice_profile(
+        record.get("requested_voice_profile", "local-cori"),
+        kid_mode=kid_mode,
+        realtime_available=_realtime_available(),
+    )
+    warning = override_warning or record.get("warning", "")
+    return {
+        "bundles": [public_bundle(bundle) for bundle in BUNDLES],
+        "device_id": device_id,
+        "record": record,
+        "effective_voice_profile": effective,
+        "warning": warning,
+        "kid_mode": kid_mode,
+    }
+
+
+@router.get("/face-bundles", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundles_partial(request: Request, device_id: str = "") -> Any:
+    status, body = await asyncio.to_thread(
+        _face_admin_request, "GET", f"face-pack-status?device_id={device_id}", None,
+    )
+    resolved_id = str(body.get("device_id") or device_id)
+    if status == 200 and body.get("active_face_pack_id"):
+        _FACE_BUNDLE_STORE.mark_active(
+            resolved_id,
+            str(body["active_face_pack_id"]),
+            success=bool(body.get("success", True)),
+            reason=str(body.get("reason") or ""),
+        )
+    return templates.TemplateResponse(
+        request, "face_bundles.html", _face_bundle_context(resolved_id),
+    )
+
+
+async def _apply_face_bundle(
+    request: Request, bundle: FaceBundle, device_id: str,
+) -> Any:
+    kid_getter = _state.get("kid_mode_getter")
+    kid_setter = _state.get("kid_mode_setter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    if bundle.enables_kid_mode and not kid_mode:
+        if kid_setter is None:
+            return templates.TemplateResponse(
+                request, "face_bundle_result.html",
+                {"ok": False, "error": "Kid Mode cannot be enabled on this dashboard."},
+            )
+        result = await kid_setter(True)
+        if not (bool(result.get("ok")) if isinstance(result, dict) else bool(result)):
+            return templates.TemplateResponse(
+                request, "face_bundle_result.html",
+                {"ok": False, "error": "Kid Mode failed to enable; the bundle was not applied."},
+            )
+        kid_mode = True
+
+    _, voice_warning = effective_voice_profile(
+        bundle.requested_voice_profile,
+        kid_mode=kid_mode,
+        realtime_available=_realtime_available(),
+    )
+    _FACE_BUNDLE_STORE.set_requested(
+        device_id, bundle, pending=True, warning=voice_warning,
+    )
+    status, body = await asyncio.to_thread(
+        _face_admin_request,
+        "POST",
+        "set-face-pack",
+        {"device_id": device_id, "pack_id": bundle.face_pack_id},
+    )
+    resolved_id = str(body.get("device_id") or device_id)
+    if resolved_id and resolved_id != device_id:
+        _FACE_BUNDLE_STORE.set_requested(
+            resolved_id, bundle, pending=True, warning=voice_warning,
+        )
+    if status not in (200, 202):
+        # Desired state remains persisted. Reconnect sync will reassert it.
+        error = str(body.get("error") or f"HTTP {status}")
+        return templates.TemplateResponse(
+            request, "face_bundle_result.html",
+            {"ok": True, "pending": True, "warning": error},
+        )
+    return templates.TemplateResponse(
+        request, "face_bundle_result.html",
+        {"ok": True, "pending": True, "warning": voice_warning},
+    )
+
+
+@router.post("/actions/face-bundle/preview", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundle_preview(
+    request: Request,
+    bundle_id: str = Form(...),
+    device_id: str = Form(""),
+) -> Any:
+    bundle = BUNDLE_BY_ID.get(bundle_id)
+    if bundle is None:
+        raise HTTPException(400, "unknown face bundle")
+    current = _FACE_BUNDLE_STORE.get(device_id)
+    kid_getter = _state.get("kid_mode_getter")
+    kid_mode = bool(kid_getter()) if kid_getter else True
+    changes_voice = current.get("requested_voice_profile") != bundle.requested_voice_profile
+    enables_kid = bundle.enables_kid_mode and not kid_mode
+    if not changes_voice and not enables_kid:
+        return await _apply_face_bundle(request, bundle, device_id)
+    effective, warning = effective_voice_profile(
+        bundle.requested_voice_profile,
+        kid_mode=(kid_mode or bundle.enables_kid_mode),
+        realtime_available=_realtime_available(),
+    )
+    return templates.TemplateResponse(
+        request,
+        "face_bundle_confirmation.html",
+        {
+            "bundle": public_bundle(bundle),
+            "device_id": device_id,
+            "changes_voice": changes_voice,
+            "enables_kid_mode": enables_kid,
+            "effective_voice_profile": effective,
+            "warning": warning,
+        },
+    )
+
+
+@router.post("/actions/face-bundle/apply", response_class=HTMLResponse, include_in_schema=False)
+async def face_bundle_apply(
+    request: Request,
+    bundle_id: str = Form(...),
+    device_id: str = Form(""),
+) -> Any:
+    bundle = BUNDLE_BY_ID.get(bundle_id)
+    if bundle is None:
+        raise HTTPException(400, "unknown face bundle")
+    return await _apply_face_bundle(request, bundle, device_id)
 
 
 # Phase 4 — State + Smart-mode dashboard cards. Both are LIVE-update (no

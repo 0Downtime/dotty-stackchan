@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 import websockets
 from config.logger import setup_logging
@@ -141,13 +142,53 @@ class WebSocketServer:
         # DOTTY-PATCH: register this connection so the admin HTTP route can
         # find it. Use the request header (the protocol-mandated identifier).
         _dotty_dev_id = websocket.request.headers.get("device-id", "") or ""
+        _dotty_started = time.monotonic()
+        _dotty_peer = getattr(websocket, "remote_address", None)
+        self.logger.bind(tag=TAG).info(
+            "DOTTY_CONN_OPEN "
+            f"device={_dotty_dev_id or '-'} peer={_dotty_peer!r} "
+            f"path={getattr(websocket.request, 'path', '-')!r}"
+        )
         if _dotty_dev_id:
             _dotty_active_connections[_dotty_dev_id] = handler
+        _dotty_handler_error = None
+        _dotty_face_sync_task = None
+        if _dotty_dev_id:
+            async def _sync_face_bundle_after_connect():
+                # handle_connection installs websocket/session_id. Wait for
+                # that seam, then reassert server desired state immediately.
+                for _ in range(100):
+                    if getattr(handler, "websocket", None) is not None:
+                        break
+                    await asyncio.sleep(0.05)
+                if getattr(handler, "websocket", None) is None:
+                    return
+                try:
+                    from core.utils.face_bundles import FaceBundleStore
+                    from core.utils.device_command import call_tool
+                    desired = FaceBundleStore().get(_dotty_dev_id)
+                    pack_id = desired.get("face_pack_id", "classic")
+                    handler._dotty_requested_face_pack = pack_id
+                    handler._dotty_face_pack_pending = True
+                    await call_tool(
+                        handler, "self.robot.set_face_pack", {"pack_id": pack_id},
+                    )
+                except Exception as sync_error:
+                    self.logger.bind(tag=TAG).warning(
+                        "face bundle reconnect sync failed "
+                        f"({type(sync_error).__name__})"
+                    )
+            _dotty_face_sync_task = asyncio.create_task(
+                _sync_face_bundle_after_connect(), name="face_bundle_reconnect_sync"
+            )
         try:
             await handler.handle_connection(websocket)
         except Exception as e:
+            _dotty_handler_error = e
             self.logger.bind(tag=TAG).error(f"处理连接时出错: {e}")
         finally:
+            if _dotty_face_sync_task is not None and not _dotty_face_sync_task.done():
+                _dotty_face_sync_task.cancel()
             if _dotty_realtime is not None:
                 try:
                     await _dotty_realtime.close()
@@ -160,6 +201,31 @@ class WebSocketServer:
             # (a quick reconnect with the same device-id may have replaced it).
             if _dotty_dev_id and _dotty_active_connections.get(_dotty_dev_id) is handler:
                 _dotty_active_connections.pop(_dotty_dev_id, None)
+            # DOTTY-PATCH: log transport-level closure evidence before forcing
+            # a server-side close.  The upstream ConnectionHandler consumes
+            # ConnectionClosed and only emits a generic "client disconnected"
+            # message, which cannot distinguish a clean session end from a
+            # Wi-Fi loss, brownout, watchdog reset, or firmware crash.  The
+            # websockets close code is 1006 when no close frame was received.
+            _dotty_pre_state = getattr(
+                getattr(websocket, "state", None), "name", "UNKNOWN"
+            )
+            _dotty_pre_code = getattr(websocket, "close_code", None)
+            _dotty_pre_reason = getattr(websocket, "close_reason", None)
+            _dotty_duration_ms = int((time.monotonic() - _dotty_started) * 1000)
+            _dotty_error_name = (
+                type(_dotty_handler_error).__name__
+                if _dotty_handler_error is not None
+                else "none"
+            )
+            self.logger.bind(tag=TAG).warning(
+                "DOTTY_CONN_END "
+                f"device={_dotty_dev_id or '-'} peer={_dotty_peer!r} "
+                f"duration_ms={_dotty_duration_ms} pre_state={_dotty_pre_state} "
+                f"close_code={_dotty_pre_code!r} "
+                f"close_reason={_dotty_pre_reason!r} "
+                f"handler_error={_dotty_error_name}"
+            )
             # 强制关闭连接（如果还没有关闭的话）
             try:
                 # 安全地检查WebSocket状态并关闭

@@ -15,9 +15,11 @@ import { recallPersonTool } from "./tools/recall_person.ts";
 import { rememberTool } from "./tools/remember.ts";
 import { rememberPersonTool } from "./tools/remember_person.ts";
 import { takePhotoTool } from "./tools/take_photo.ts";
+import { deviceStatusTool } from "./tools/device_status.ts";
 import { thinkHardTool } from "./tools/think_hard.ts";
 
 export default function (pi: ExtensionAPI) {
+  pi.registerTool(deviceStatusTool);
   pi.registerTool(memoryLookupTool);
   pi.registerTool(recallPersonTool);
   pi.registerTool(rememberTool);

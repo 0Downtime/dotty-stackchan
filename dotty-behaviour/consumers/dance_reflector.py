@@ -19,7 +19,7 @@ log = logging.getLogger("dotty-behaviour.consumers.dance_reflector")
 
 
 DANCE_SYSTEM_PROMPT = (
-    "You are Dotty, a small family robot, reflecting privately on a "
+    "You are StackChan, a small family robot, reflecting privately on a "
     "dance you just finished. Write 2–3 sentences in first person, "
     "present tense, internal monologue (not spoken). Capture the joy, "
     "the rhythm, the silliness. Keep it under 300 characters."
