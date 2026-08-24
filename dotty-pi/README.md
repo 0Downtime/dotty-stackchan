@@ -15,8 +15,9 @@ The runtime contract is:
 
 - **xiaozhi-server** routes voice-LLM calls to the `PiVoiceLLM` provider.
 - **PiVoiceLLM / PiClient** translates each turn into a pi RPC request.
-- **pi** (this container) runs the prompt against llama-swap on the same
-  host (`http://localhost:8080/v1`, model `qwen3.6:27b` by default), with
+- **pi** (this container) runs the prompt against the oMLX-compatible
+  inference endpoint (`http://100.64.0.1:18000/v1`) using the
+  `Qwen3.5-4B-MLX-4bit` voice model, with
   the [`dotty-pi-ext`](../dotty-pi-ext/) extension loaded for the seven
   voice tools (`memory_lookup`, `remember`, `recall_person`,
   `remember_person`, `think_hard`, `take_photo`, `play_song`).
@@ -60,33 +61,30 @@ On-box layout (build context and live state are **separate** directories):
             └── node_modules/    # hand-compiled better-sqlite3 (preserved)
 ```
 
-## Model selection — DO NOT use `qwen3.6:27b` here
+## Model selection — use the registered oMLX voice model
 
-llama-swap (`/mnt/user/appdata/llama-swap/config.yaml`) groups models
-into matrix sets — `voice` (resident: `qwen3.5:4b` + `qwen3.6:27b-think`)
-and `coding` (resident: `qwen3.6:27b` alone). Requesting the coding-set
-model evicts both voice models; reloading either is a 30–50 s cold hit.
+The live deployment exposes the voice model through an OpenAI-compatible
+oMLX endpoint. Keep the configured provider/model pair stable; an
+unregistered alias makes the Pi RPC process exit before a voice turn.
 
 The cutover model split (validated 2026-05-17 end-to-end):
 
 | Loop | Model | Why |
 |---|---|---|
-| Outer agent (`pi --model …`) | `qwen3.5:4b` | Fast, in voice set, drives tool-routing reliably enough for Dotty's flat tool surface. |
+| Outer agent (`pi --model …`) | `Qwen3.5-4B-MLX-4bit` | Fast oMLX voice model for Dotty's flat tool surface. |
 | `think_hard` escalation | `qwen3.6:27b-think` | The 8K-context 27B, in voice set, resident alongside 4B. Direct llama-swap POST inside the extension; no agent overhead. |
 
-**Never** call `pi --model qwen3.6:27b` from this container — it evicts
-`qwen3.6:27b-think` and the next `think_hard` call times out at 30 s
-waiting for the cold reload. The integration test on 2026-05-17 caught
-this exact failure (returned `"(I'm slow today, try again in a moment)"`
-twice before the fix).
+Do not call Pi with an unregistered provider or model alias. Validate the
+live inventory with `pi --list-models`; the voice path uses provider `omlx`
+and model `Qwen3.5-4B-MLX-4bit`.
 
 Measured wall-clock for the 4B + 27B-think split:
 
 - `memory_lookup` (no LLM escalation): ~5.8 s total (4B turn + tool + reply)
 - `think_hard` ("reply with `pong`"): ~45 s total warm (4B turn + tool fires inner 27B-think call + reply)
 
-The `models.json` shipped here registers all three aliases but the agent
-loop should always target `qwen3.5:4b`.
+The shipped `models.json` registers the single voice model used by the
+agent loop: `Qwen3.5-4B-MLX-4bit`.
 
 ## Versioning
 

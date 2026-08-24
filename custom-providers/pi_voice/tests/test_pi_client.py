@@ -365,8 +365,11 @@ class TestDefaultFlags(unittest.TestCase):
     def test_appliance_defaults_remain_unchanged(self):
         with patch.dict(os.environ, {}, clear=True):
             flags = _default_pi_flags()
-        self.assertEqual(flags[flags.index("--provider") + 1], "ollama")
-        self.assertEqual(flags[flags.index("--model") + 1], "qwen3.5:4b")
+        self.assertEqual(flags[flags.index("--provider") + 1], "omlx")
+        self.assertEqual(
+            flags[flags.index("--model") + 1], "Qwen3.5-4B-MLX-4bit"
+        )
+        self.assertIn("--no-builtin-tools", flags)
 
     def test_remote_provider_and_model_are_configurable(self):
         with patch.dict(

@@ -13,7 +13,13 @@ person-memory tools added in #53 (`recall_person`, `remember_person`).
 PiVoiceLLM is the live default voice path and this extension is the
 production source of truth for these tools.
 
-## The seven voice tools
+## The eight voice tools
+
+### `device_status`
+
+Reads the connected robot's current firmware status (including speaker volume,
+battery, screen, and network information) through the authenticated xiaozhi
+admin bridge. It is read-only and waits for the correlated firmware response.
 
 These are the tools that voice turns invoke during conversation. The
 original five replicate the semantics of the matching `_voice_tool_*`

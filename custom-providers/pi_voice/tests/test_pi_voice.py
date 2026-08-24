@@ -33,7 +33,10 @@ from pi_voice import (  # noqa: E402
     PiClientError,
     _wrap_with_sandwich,
 )
-from pi_voice.pi_voice import _last_user_text  # noqa: E402
+from pi_voice.pi_voice import (  # noqa: E402
+    _last_user_text,
+    _needs_live_device_status,
+)
 
 
 class FakeClient:
@@ -103,6 +106,47 @@ class TestSandwichInjection(unittest.TestCase):
         self.assertTrue(wrapped.startswith("hi"))
         self.assertLess(wrapped.index("VOICE TOOL ROUTING"), wrapped.index("HARD CONSTRAINTS"))
         self.assertIn("not to tool calls", wrapped)
+        self.assertIn("device_status for current volume", wrapped)
+        self.assertIn("Never substitute file, shell, or coding tools", wrapped)
+
+    def test_unambiguous_current_status_queries_are_detected(self):
+        for text in (
+            "Check your current speaker volume",
+            "What's your battery level?",
+            "How strong is the Wi-Fi signal right now?",
+        ):
+            self.assertTrue(_needs_live_device_status(text), text)
+        for text in ("Tell me about batteries", "Can you hear me?", "Hello"):
+            self.assertFalse(_needs_live_device_status(text), text)
+
+    def test_verified_status_is_put_before_tool_and_spoken_constraints(self):
+        wrapped = _wrap_with_sandwich(
+            "Check your current speaker volume",
+            True,
+            live_device_status='{"audio_speaker":{"volume":70}}',
+        )
+        self.assertIn("runtime already called device_status", wrapped)
+        self.assertIn('"volume":70', wrapped)
+        self.assertLess(
+            wrapped.index("VERIFIED LIVE DEVICE STATUS"),
+            wrapped.index("VOICE TOOL ROUTING"),
+        )
+
+    def test_status_preflight_is_injected_for_a_live_status_turn(self):
+        client = FakeClient()
+        client.script_turn(["😊 Volume is 70 percent."])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        with patch(
+            "pi_voice.pi_voice._fetch_live_device_status",
+            return_value='{"audio_speaker":{"volume":70}}',
+        ) as fetch:
+            output = list(provider.response(
+                "s",
+                [{"role": "user", "content": "Check your current volume"}],
+            ))
+        fetch.assert_called_once_with("Check your current volume")
+        self.assertIn('"volume":70', client.prompts[0])
+        self.assertEqual("".join(output), "😊 Volume is 70 percent.")
 
     def test_json_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": '{"content": "remember purple"}'}]
@@ -184,7 +228,7 @@ class TestEmptyTurn(unittest.TestCase):
 
 
 class TestNewSessionLifecycle(unittest.TestCase):
-    def test_first_turn_skips_new_session(self):
+    def test_same_xiaozhi_session_keeps_pi_context(self):
         os.environ["DOTTY_KID_MODE"] = "true"
         client = FakeClient()
         client.script_turn(["ok"])
@@ -193,7 +237,81 @@ class TestNewSessionLifecycle(unittest.TestCase):
         list(provider.response("s", [{"role": "user", "content": "a"}]))
         self.assertEqual(client.new_session_calls, 0, "no new_session on first turn")
         list(provider.response("s", [{"role": "user", "content": "b"}]))
-        self.assertEqual(client.new_session_calls, 1, "new_session on second turn")
+        self.assertEqual(client.new_session_calls, 0, "same session keeps context")
+
+    def test_same_xiaozhi_session_resets_after_conversation_idle_timeout(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider(
+            {"session_idle_timeout_seconds": 900}, client=client,
+        )  # type: ignore[arg-type]
+
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 1000.0)):
+            list(provider.response("same-session", [{"role": "user", "content": "a"}]))
+            list(provider.response("same-session", [{"role": "user", "content": "b"}]))
+
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_changed_xiaozhi_session_resets_pi_context(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+
+        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
+        list(provider.response("session-b", [{"role": "user", "content": "b"}]))
+
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_missing_session_id_does_not_inherit_known_session(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+
+        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
+        list(provider.response(None, [{"role": "user", "content": "b"}]))
+
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_idless_session_resets_after_idle_timeout(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider(
+            {"session_idle_timeout_seconds": 120}, client=client,
+        )  # type: ignore[arg-type]
+
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 221.0)):
+            list(provider.response(None, [{"role": "user", "content": "a"}]))
+            list(provider.response(None, [{"role": "user", "content": "b"}]))
+
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_failed_boundary_reset_refuses_to_reuse_old_context(self):
+        class FailingResetClient(FakeClient):
+            def new_session(self) -> None:
+                self.new_session_calls += 1
+                raise PiClientError("reset failed")
+
+        client = FailingResetClient()
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        list(provider.response(
+            "session-a", [{"role": "user", "content": "private context"}],
+        ))
+
+        output = list(provider.response(
+            "session-b", [{"role": "user", "content": "new conversation"}],
+        ))
+
+        self.assertEqual(client.new_session_calls, 1)
+        self.assertEqual(len(client.prompts), 1, "new prompt must not reach old context")
+        self.assertEqual(
+            output,
+            [f"{textUtils.FALLBACK_EMOJI} (brain offline — try again in a moment)"],
+        )
 
     def test_concurrent_responses_are_serialized_through_agent_end(self):
         class OverlapDetectingClient(FakeClient):
@@ -241,7 +359,7 @@ class TestNewSessionLifecycle(unittest.TestCase):
         self.assertFalse(second.is_alive())
         self.assertEqual(client.max_active, 1)
         self.assertEqual(len(outputs), 2)
-        self.assertEqual(client.new_session_calls, 1)
+        self.assertEqual(client.new_session_calls, 0)
 
 
 class TestErrorFallback(unittest.TestCase):

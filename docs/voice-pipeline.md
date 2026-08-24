@@ -8,7 +8,7 @@ description: xiaozhi-esp32-server pipeline stages -- VAD, ASR, LLM proxy, and TT
 ## TL;DR
 
 - **Server** is `xinnan-tech/xiaozhi-esp32-server` running in Docker on a Linux host. Plugin-based: each of VAD, ASR, LLM, TTS, Memory, Intent is a swappable provider picked via `data/.config.yaml`'s `selected_module:` block.
-- Our live pipeline: **SileroVAD** (speech-end) → **FunASR SenseVoiceSmall** (or **WhisperLocal**, or the opt-in no-torch **SenseVoiceOnnx**) (ASR, pinned to English) → **PiVoiceLLM** custom provider (current default — `docker exec -i dotty-pi pi --mode rpc` over stdio, brain is the `dotty-pi` container) or **OpenAICompat** (alternate — points straight at any OpenAI-compatible endpoint) → **LocalPiper** en_GB-cori-medium (TTS; EdgeTTS / StreamingEdgeTTS as alternates).
+- Our live pipeline: **SileroVAD** (speech-end) → **FunASR SenseVoiceSmall** (or **WhisperLocal**, or the opt-in no-torch **SenseVoiceOnnx**) (ASR, pinned to English) → **PiVoiceLLM** custom provider (current default — `docker exec -i dotty-pi pi --mode rpc` over stdio, brain is the `dotty-pi` container) or **OpenAICompat** (alternate — points straight at any OpenAI-compatible endpoint) → **LocalPiper** en_US-kristin-medium (TTS; EdgeTTS / StreamingEdgeTTS as alternates).
 - An experimental, adult-mode-only **OpenAI Realtime** route can own live audio above those stages. It is disabled by default and always falls back to this local pipeline while Kid Mode is active. See [openai-realtime.md](./openai-realtime.md).
 - The xiaozhi container also runs a perception relay (`EventTextMessageHandler`) that forwards firmware `face_detected` / `face_lost` / `sound_event` / `state_changed` frames to `dotty-behaviour`'s `/api/perception/event`.
 - **Emotion** is not a pipeline stage — it's extracted post-hoc from the LLM's emoji prefix and emitted as a separate WS frame. See [protocols.md](./protocols.md#emotion-protocol).
@@ -96,16 +96,16 @@ Custom provider at `custom-providers/openai_compat/openai_compat.py`. Talks dire
 
 **Active: Piper local.**
 - Engine: piper-tts 1.4.2 on ONNX runtime.
-- Voice: `en_GB-cori-medium` (Piper "medium" quality tier, British English).
+- Voice: `en_US-kristin-medium` (Piper "medium" quality tier, cheerful US English; Kid Mode default).
 - Voice files (~63 MB total): `.onnx` + `.onnx.json` sibling, fetched from `huggingface.co/rhasspy/piper-voices`.
 - Measured on a modest i5-3570 Docker host: 0.22 s synth for 2.8 s of audio — 12.7× realtime.
 - Image: `xiaozhi-esp32-server-piper:local` (local `Dockerfile` extends the upstream image with piper-tts).
 - Runs fully offline — no external HTTP calls.
-- **License note (unverified).** Piper voices are MIT-licensed as a repo, but individual voices carry their own upstream license depending on training data. Verify the Cori-specific voice license before redistributing your robot's recordings beyond personal use. Starting point: [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
+- **License note (unverified).** Piper voices are MIT-licensed as a repo, but individual voices carry their own upstream license depending on training data. Verify the Kristin-specific voice license before redistributing your robot's recordings beyond personal use. Starting point: [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
 
 **Rollback: EdgeTTS (`type: edge`).**
 - Uses Microsoft's unofficial Edge "Read aloud" endpoint (reverse-engineered; no official API key).
-- Voice: `en-US-AnaNeural` (our previous child-sounding voice).
+- Voice: `en-GB-MaisieNeural` (a young, cheerful UK voice suited to Kid Mode).
 - Streaming supported; non-streaming is the default that ships with the upstream image.
 - **Known failure mode**: returns silent audio when the input text is not in the voice's language. This is the symptom we chased for the Qwen-Chinese-leak bug — an `en-US-*` voice with Chinese text = empty buffer, not an error.
 - **Risk**: MS can rate-limit, change endpoints, or kill the product. Keep an eye on [rany2/edge-tts](https://github.com/rany2/edge-tts) for ecosystem signals.

@@ -20,7 +20,7 @@ Rough edges: face emoji rendering misses 4 of 9 emotions visually; the sound-dir
 
 No promises — just a few ideas I might get around to, roughly in order of interest:
 
-- Better wake word ("Hey Dotty" instead of the current "Hi, ESP")
+- Better wake word ("Hey Dotty" instead of the current "Hi, Stack Chan")
 - Story Mode improvements (longer narratives, character voices)
 - Improve Security Mode
 

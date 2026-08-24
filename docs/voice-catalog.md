@@ -45,7 +45,7 @@ needed.
 | `en_GB-semaine-medium`           | en_GB  | medium  | Neutral UK          | Adult         | ~63 MB |
 
 The default voice that ships with `make fetch-models` is
-`en_GB-cori-medium` — a safe, friendly starting point.
+`en_US-kristin-medium` — a cheerful, bright starting point for Kid Mode.
 
 ### Notes on quality tiers
 

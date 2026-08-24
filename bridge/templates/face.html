@@ -1,1 +1,5 @@
-{% if emoji %}<span class="text-2xl" title="last face: {{ age }}">{{ emoji }}</span>{% else %}<span class="text-base-content/30 text-2xl">·</span>{% endif %}
+{% set doodle_faces = {"😊": "happy", "😆": "laughing", "😢": "sad", "😮": "surprised", "🤔": "thinking", "😠": "angry", "😐": "neutral", "😍": "loving", "😴": "sleepy"} %}
+{% if emoji %}
+<img class="doodle-face-icon" src="/ui/static/facepacks/doodle-game/{{ doodle_faces.get(emoji, 'neutral') }}.png"
+     alt="{{ doodle_faces.get(emoji, 'neutral') }} face" title="last face: {{ age }}">
+{% else %}<span class="text-base-content/30 text-2xl">·</span>{% endif %}

@@ -16,7 +16,7 @@ selected_module:
   ASR: <ASR_MODULE>       # WhisperLocal (CUDA) / FunASR (CPU fallback) / SenseVoiceOnnx (int8, no-torch)
   LLM: PiVoiceLLM         # default: agent loop hosted in the dotty-pi container (requires the sibling dotty-pi service)
   # LLM: OpenAICompat      # <-- alternate: direct OpenAI-compatible LLM
-  TTS: LocalPiper
+  TTS: DottySwitching
   Memory: nomem
   Intent: nointent
 
@@ -97,18 +97,31 @@ ASR:
 TTS:
   EdgeTTS:
     type: edge
-    voice: en-AU-WilliamNeural
+    voice: en-GB-MaisieNeural
     output_dir: tmp/
   StreamingEdgeTTS:
     type: edge_stream
-    voice: en-AU-WilliamNeural
+    voice: en-GB-MaisieNeural
     output_dir: tmp/
   LocalPiper:
     type: piper_local
-    voice: en_GB-cori-medium
-    model_path: /opt/xiaozhi-esp32-server/models/piper/en_GB-cori-medium.onnx
-    config_path: /opt/xiaozhi-esp32-server/models/piper/en_GB-cori-medium.onnx.json
+    voice: en_US-kristin-medium
+    model_path: /opt/xiaozhi-esp32-server/models/piper/en_US-kristin-medium.onnx
+    config_path: /opt/xiaozhi-esp32-server/models/piper/en_US-kristin-medium.onnx.json
     output_dir: tmp/
+  DottySwitching:
+    type: dotty_switching
+    state_file: /var/lib/dotty-bridge/tts/provider
+    providers:
+      local_piper:
+        type: piper_local
+        voice: en_US-kristin-medium
+        model_path: /opt/xiaozhi-esp32-server/models/piper/en_US-kristin-medium.onnx
+        config_path: /opt/xiaozhi-esp32-server/models/piper/en_US-kristin-medium.onnx.json
+        output_dir: tmp/
+      openai_tts:
+        type: openai_tts
+        output_dir: tmp/
 
 LLM:
   # PiVoiceLLM — routes voice turns to the `dotty-pi` container via
@@ -121,6 +134,8 @@ LLM:
   PiVoiceLLM:
     type: pi_voice
     container_name: dotty-pi
+    # Fresh conversation after 15 minutes without a user turn.
+    session_idle_timeout_seconds: 900
 
   # Generic OpenAI-compatible provider — works with OpenAI, OpenRouter,
   # Ollama (http://host:11434/v1), LM Studio, vLLM, etc.

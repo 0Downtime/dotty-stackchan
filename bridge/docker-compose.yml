@@ -20,7 +20,7 @@
 #   ever touches /root/zeroclaw-bridge/.
 #
 # network_mode: host so the dashboard can reach llama-swap (:8080) and
-# xiaozhi-server (:8003 admin / :8000 ws) on loopback. Note: bridge.py's
+# xiaozhi-server (:8003 admin / :8000 ws) on the host LAN address. Note: bridge.py's
 # own listen port is 8081 (PORT env) — 8080 is taken by llama-swap on
 # Unraid, so the legacy CLAUDE.md "dashboard on 8080" entry is updated
 # in this PR.
@@ -44,8 +44,10 @@ services:
       - TZ=Australia/Brisbane
       - PORT=8081
       - PYTHONUNBUFFERED=1
-      # xiaozhi-server admin endpoints (loopback on Unraid host network).
-      - XIAOZHI_HOST=127.0.0.1
+      # xiaozhi-server admin endpoints. Override XIAOZHI_HOST for another host;
+      # the deployment default is the LAN address because Xiaozhi is bound
+      # there rather than to loopback.
+      - XIAOZHI_HOST=${XIAOZHI_HOST:-10.0.20.89}
       - XIAOZHI_OTA_PORT=8003
       # State + logs — redirect the legacy /root/zeroclaw-bridge/* paths
       # to /var/lib/dotty-bridge/* inside the container, which is bind-
