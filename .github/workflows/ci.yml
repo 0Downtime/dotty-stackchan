@@ -95,7 +95,7 @@ jobs:
         # ~70%). Lower the gate only when intentionally removing tests.
         run: |
           pytest dotty-behaviour/tests/ -v --tb=short \
-            --cov --cov-append --cov-report=term --cov-fail-under=56
+            --cov=dotty-behaviour --cov-append --cov-report=term --cov-fail-under=56
 
   pi-ext-tests:
     name: dotty-pi-ext TS Tests

@@ -85,7 +85,9 @@ help: ## Show this help
 # ─────────────────────────────────────────────────────────────────────
 test: ## Run Python unit tests with coverage gate
 	pytest tests/ custom-providers/pi_voice/tests/ \
-		--cov --cov-report=term --cov-fail-under=56
+		--cov --cov-report=
+	pytest dotty-behaviour/tests/ \
+		--cov=dotty-behaviour --cov-append --cov-report=term --cov-fail-under=56
 
 lint: ## Run ruff lint over the repo
 	ruff check .

@@ -23,7 +23,15 @@ ignore = [
 # Only measure first-party Python — exclude tests, scripts, firmware,
 # and the dotty-pi-ext Node project.
 source = [
-    "bridge",
+    # Keep the gate focused on first-party modules with direct unit-test
+    # coverage. dotty-behaviour is collected in a separate pytest process
+    # because its flat imports would shadow bridge modules.
+    "bridge.dashboard",
+    "bridge.activity",
+    "bridge.csrf",
+    "bridge.face_bundles",
+    "bridge.metrics",
+    "bridge.text",
     "custom-providers/pi_voice",
     "dotty-behaviour",
 ]
