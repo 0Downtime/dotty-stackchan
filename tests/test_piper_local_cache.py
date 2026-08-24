@@ -35,7 +35,13 @@ class PiperLocalCacheTests(unittest.TestCase):
         config.logger = config_logger
 
         tts_base = types.ModuleType("core.providers.tts.base")
-        tts_base.TTSProviderBase = type("TTSProviderBase", (), {})
+
+        def _base_get_segment_text(_self):
+            return None
+
+        tts_base.TTSProviderBase = type(
+            "TTSProviderBase", (), {"_get_segment_text": _base_get_segment_text}
+        )
         tts_dto = types.ModuleType("core.providers.tts.dto.dto")
         tts_dto.ContentType = MagicMock()
         tts_dto.InterfaceType = MagicMock()
@@ -47,6 +53,9 @@ class PiperLocalCacheTests(unittest.TestCase):
         core_utils = types.ModuleType("core.utils")
         core_utils.opus_encoder_utils = MagicMock()
         core_utils.textUtils = MagicMock()
+        core_utils.textUtils.get_string_no_punctuation_or_emoji.side_effect = (
+            lambda value: value.strip()
+        )
         core = types.ModuleType("core")
         core.utils = core_utils
 
@@ -108,6 +117,38 @@ class PiperLocalCacheTests(unittest.TestCase):
         module._cached_voice("/models/b.onnx", "/models/b.json")
 
         self.assertEqual(module.PiperVoice.load.call_count, 2)
+
+    def test_long_unpunctuated_text_flushes_at_word_boundary(self):
+        module = self._load_module()
+        provider = module.TTSProvider.__new__(module.TTSProvider)
+        provider.tts_text_buff = [
+            "😊 This is a deliberately long response without punctuation "
+            "so first audio can start"
+        ]
+        provider.processed_chars = 0
+        provider.is_first_sentence = True
+
+        segment = provider._get_segment_text()
+
+        self.assertEqual(
+            segment,
+            "😊 This is a deliberately long response without",
+        )
+        self.assertEqual(
+            provider.tts_text_buff[0][provider.processed_chars :].lstrip(),
+            "punctuation so first audio can start",
+        )
+        self.assertFalse(provider.is_first_sentence)
+
+    def test_short_unpunctuated_text_waits_for_more_input(self):
+        module = self._load_module()
+        provider = module.TTSProvider.__new__(module.TTSProvider)
+        provider.tts_text_buff = ["😊 A short unfinished thought"]
+        provider.processed_chars = 0
+        provider.is_first_sentence = True
+
+        self.assertIsNone(provider._get_segment_text())
+        self.assertEqual(provider.processed_chars, 0)
 
 
 if __name__ == "__main__":

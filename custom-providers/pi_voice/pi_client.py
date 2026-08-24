@@ -50,8 +50,11 @@ logger = logging.getLogger(__name__)
 
 def _default_pi_flags() -> tuple[str, ...]:
     """Build agent flags from the deployment environment contract."""
-    provider = os.environ.get("DOTTY_PI_PROVIDER", "ollama")
-    model = os.environ.get("DOTTY_PI_MODEL", "qwen3.5:4b")
+    # Keep the defaults aligned with the appliance's live dotty-pi model
+    # inventory so an omitted environment override still launches a valid
+    # provider/model pair.
+    provider = os.environ.get("DOTTY_PI_PROVIDER", "omlx")
+    model = os.environ.get("DOTTY_PI_MODEL", "Qwen3.5-4B-MLX-4bit")
     return (
         "--mode", "rpc",
         "--provider", provider,

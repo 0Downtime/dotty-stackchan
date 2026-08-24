@@ -37,6 +37,11 @@ services:
       # Currently fixed to "default" — smart.md exists for manual swap when you
       # want an adult-framed persona on the smart-mode cloud path.
       - PERSONA=default
+      # PiVoiceLLM runtime contract. Keep these defaults aligned with
+      # dotty-pi/models.json.
+      - DOTTY_PI_CONTAINER=${DOTTY_PI_CONTAINER:-dotty-pi}
+      - DOTTY_PI_PROVIDER=${DOTTY_PI_PROVIDER:-omlx}
+      - DOTTY_PI_MODEL=${DOTTY_PI_MODEL:-Qwen3.5-4B-MLX-4bit}
       # kid_mode / smart_mode toggle state — receiveAudioHandle.py READS these
       # to paint the firmware LED pips on reconnect; the bridge dashboard WRITES
       # them. Both containers must point at the SAME files, so this path is

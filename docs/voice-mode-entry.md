@@ -7,13 +7,13 @@ description: Every way to invite Dotty into a voice turn — wake word, face det
 
 A "voice turn" is the moment Dotty switches from passive idle to actively listening: the wake-word path opens, the mic opens, ASR captures speech, the LLM responds, and TTS plays. There are four distinct ways to enter that state today. This page collects them in one place, with a comparison table at the end so you can pick the right one for the room you're in.
 
-The default phrase is **"Hi, ESP"** (firmware shipped this as the default in a recent change). See [wake-word.md](./wake-word.md) for how to change it.
+The default phrase is **"Hi, Stack Chan"**. See [wake-word.md](./wake-word.md) for how to change it.
 
 ## Entry paths
 
 ### 1. Wake word — firmware
 
-> **"Hi, ESP" (default), "Hi, Stack Chan", "Computer", or any of the prebuilt WakeNet9 phrases.**
+> **"Hi, Stack Chan" (default), "Hi, ESP", "Computer", or any of the prebuilt WakeNet9 phrases.**
 
 The classic path. The mic is always sampling at low cost (AFE + WakeNet9 INT8 on the ESP32-S3). When the wake-net spots the phrase, `Application::HandleWakeWordDetectedEvent` opens the WebSocket and the robot transitions to listening. Works with no line of sight, no touch, no LAN. **Requires the user to speak.**
 
@@ -45,7 +45,7 @@ This is the path the portal "Greet" button and `dotty-behaviour` consumers (e.g.
 
 | Entry path | Works in dark | Line of sight | Spoken utterance | Touch | LAN admin | Cooldown |
 |---|---|---|---|---|---|---|
-| Wake word ("Hi, ESP") | yes | no | yes | no | no | none (always armed) |
+| Wake word ("Hi, Stack Chan") | yes | no | yes | no | no | none (always armed) |
 | Face detected | no | yes | no | no | no | per-device, `FACE_GREET_MIN_INTERVAL_SEC` |
 | Head-pet hold (≥2 s) | yes | no | no | yes | no | none (immediate WakeWordInvoke) |
 | `/admin/inject-text` | yes | no | no | no | yes | none |

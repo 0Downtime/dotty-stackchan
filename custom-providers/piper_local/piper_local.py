@@ -18,6 +18,12 @@ from core.utils.activity_tts import ActivityPlaybackMixin
 TAG = __name__
 logger = setup_logging()
 
+# If Qwen streams a long clause without punctuation, do not wait for the
+# entire turn before starting TTS.  This is only a latency flush: the normal
+# punctuation rules still win, and PiVoice's Kid Mode filter remains the
+# full-turn atomic gate before any text reaches this provider.
+_STREAM_FLUSH_CHARS = 48
+
 
 # Piper owns a sizeable ONNX Runtime session. Keep it process-wide while
 # leaving queues, encoders, and activity state per provider connection.
@@ -96,6 +102,37 @@ class TTSProvider(ActivityPlaybackMixin, TTSProviderBase):
             f"pitch_scale={self.pitch_scale} length_scale={length_scale} "
             f"resample={self._up}/{self._down}"
         )
+
+    def _get_segment_text(self):
+        """Return punctuation-delimited text, or a safe phrase-sized flush.
+
+        The upstream TTS base waits for punctuation (or the final turn
+        marker). Qwen can emit a long first clause without punctuation, which
+        delays first audio even though the text stream is already available.
+        Flush only at a preceding whitespace boundary so Piper never receives
+        a partial word. Kid Mode remains protected because its full-turn
+        filter runs before this provider sees any text.
+        """
+        segment_text = super()._get_segment_text()
+        if segment_text:
+            return segment_text
+
+        full_text = "".join(self.tts_text_buff)
+        current_text = full_text[self.processed_chars :]
+        if len(current_text) < _STREAM_FLUSH_CHARS:
+            return None
+
+        boundary = current_text.rfind(" ", 0, _STREAM_FLUSH_CHARS + 1)
+        if boundary <= 0:
+            return None
+
+        segment_text_raw = current_text[: boundary + 1]
+        segment_text = textUtils.get_string_no_punctuation_or_emoji(
+            segment_text_raw
+        )
+        self.processed_chars += len(segment_text_raw)
+        self.is_first_sentence = False
+        return segment_text or None
 
     def tts_text_priority_thread(self):
         while not self.conn.stop_event.is_set():

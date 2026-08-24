@@ -37,8 +37,8 @@ xiaozhi-server (Docker)                     dotty-pi (Docker, same host)
 │    PiVoiceLLM              │              │                              │
 │       │                    │              │  on `docker exec -i` from    │
 │       ↓ async call         │              │  PiClient:                   │
-│  custom-providers/         │  docker exec │    pi --provider ollama      │
-│    pi_voice/               │  ───────────→│      --model qwen3.5:4b      │
+│  custom-providers/         │  docker exec │    pi --provider omlx        │
+│    pi_voice/               │  ───────────→│  --model Qwen3.5-4B-MLX-4bit │
 │      pi_voice.py           │              │      --mode rpc              │
 │      pi_client.py          │  ←─────────  │      --thinking off          │
 │                            │  stdout RPC  │      <prompt>                │
@@ -118,10 +118,9 @@ LLM:
 ```
 
 The model + extension wiring lives container-side (in `dotty-pi/models.json`
-and the bind-mounted `dotty-pi-ext/`); xiaozhi-server doesn't need to know
-about them. The container default is `qwen3.5:4b` outer + `qwen3.6:27b-think`
-escalation per `dotty-pi/README.md` — using `qwen3.6:27b` here would evict
-the voice matrix set, see that README's "Model selection" section.
+and the bind-mounted `dotty-pi-ext/`); xiaozhi-server supplies the launch
+flags. The appliance default is the oMLX `Qwen3.5-4B-MLX-4bit` voice model;
+keep it aligned with the live `pi-models.json`.
 
 The `bridge.py` admin dashboard service continues to run independently;
 it is no longer in the voice path. Its former `/api/voice/*` and

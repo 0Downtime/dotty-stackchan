@@ -66,6 +66,11 @@ services:
       - VISION_BRIDGE_URL=http://<XIAOZHI_HOST>:8090
       # Active persona file under ./personas/ (loaded by the LLM provider).
       - PERSONA=default
+      # PiVoiceLLM runtime contract. Keep these defaults aligned with
+      # dotty-pi/models.json.
+      - DOTTY_PI_CONTAINER=${DOTTY_PI_CONTAINER:-dotty-pi}
+      - DOTTY_PI_PROVIDER=${DOTTY_PI_PROVIDER:-omlx}
+      - DOTTY_PI_MODEL=${DOTTY_PI_MODEL:-Qwen3.5-4B-MLX-4bit}
       # kid_mode / smart_mode toggle state — receiveAudioHandle.py READS these to
       # paint the firmware LED pips on reconnect; the bridge dashboard WRITES
       # them. Both containers MUST point at the same files (bind-mounted below,

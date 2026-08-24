@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import os
 from pathlib import Path
 
@@ -51,6 +52,17 @@ class TTSProvider(TTSProviderBase):
 
     def tts_text_priority_thread(self):
         return self.backend.tts_text_priority_thread()
+
+    async def text_to_speak(self, text, output_file=None):
+        result = self.backend.text_to_speak(text, output_file)
+        return await result if inspect.isawaitable(result) else result
+
+    async def open_audio_channels(self, conn):
+        # Xiaozhi starts the facade's queue threads. The delegated backend
+        # must share the same connection because its text thread reads
+        # ``conn.stop_event`` and ``conn.client_abort`` directly.
+        self.backend.conn = conn
+        await super().open_audio_channels(conn)
 
     async def close(self):
         await self.backend.close()
