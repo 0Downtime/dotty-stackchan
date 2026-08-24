@@ -169,6 +169,10 @@ class CSRFExemptionTests(unittest.TestCase):
         )
         self.assertNotEqual(r.status_code, 403)
 
+    def test_only_machine_activity_ingest_is_admin_exempt(self):
+        self.assertTrue(csrf_mod._is_exempt("/admin/activity"))
+        self.assertFalse(csrf_mod._is_exempt("/admin/kid-mode"))
+
 
 class CSRFKillSwitchTests(unittest.TestCase):
     """DOTTY_CSRF_ENFORCE=0 → log-only mode, requests pass through."""

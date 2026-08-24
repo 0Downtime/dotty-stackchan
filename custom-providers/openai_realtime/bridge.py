@@ -66,13 +66,43 @@ def kid_mode_active() -> bool:
     return _env_bool("DOTTY_KID_MODE", True)
 
 
+def requested_voice_profile(conn: Any) -> str:
+    """Read the per-device requested profile on every routing decision.
+
+    Missing or malformed state fails to the local filtered voice path. The
+    bridge state contains IDs only; Realtime credentials remain environment
+    configuration.
+    """
+    state_file = Path(
+        os.environ.get(
+            "DOTTY_FACE_BUNDLE_STATE",
+            "/var/lib/dotty-bridge/state/face-bundles.json",
+        )
+    )
+    device_id = str(
+        getattr(conn, "device_id", "")
+        or (getattr(conn, "headers", {}) or {}).get("device-id", "")
+        or "default"
+    )
+    try:
+        payload = json.loads(state_file.read_text())
+        devices = payload.get("devices") or {}
+        record = devices.get(device_id) or devices.get("default") or {}
+        profile = str(record.get("requested_voice_profile") or "")
+        if profile in {"local-cori", "realtime-marin"}:
+            return profile
+    except (OSError, ValueError, TypeError):
+        pass
+    return "local-cori"
+
+
 @dataclass(frozen=True)
 class RealtimeSettings:
     enabled: bool = False
     api_key: str = field(default="", repr=False)
     model: str = "gpt-realtime-2.1-mini"
     voice: str = "marin"
-    name: str = "Dotty"
+    name: str = "StackChan"
     transcription_model: str = "gpt-live-transcribe"
     reasoning_effort: str = "low"
     base_url: str = "wss://api.openai.com/v1/realtime"
@@ -92,7 +122,10 @@ class RealtimeSettings:
                 "DOTTY_REALTIME_MODEL", "gpt-realtime-2.1-mini"
             ).strip(),
             voice=os.environ.get("DOTTY_REALTIME_VOICE", "marin").strip(),
-            name=(os.environ.get("DOTTY_REALTIME_NAME", "Dotty").strip() or "Dotty"),
+            name=(
+                os.environ.get("DOTTY_REALTIME_NAME", "StackChan").strip()
+                or "StackChan"
+            ),
             transcription_model=os.environ.get(
                 "DOTTY_REALTIME_TRANSCRIPTION_MODEL", "gpt-live-transcribe"
             ).strip(),
@@ -233,6 +266,7 @@ class OpenAIRealtimeBridge:
         self._warned_missing_key = False
         self._session_listen_mode: str | None = None
         self._owns_voice_route = False
+        self._local_close_after_chat = bool(getattr(conn, "close_after_chat", False))
 
     @property
     def connected(self) -> bool:
@@ -267,7 +301,10 @@ class OpenAIRealtimeBridge:
 
     def _instructions(self) -> str:
         base = str((getattr(self.conn, "config", {}) or {}).get("prompt", "")).strip()
-        name = self.settings.name
+        # Interim identity policy: all voice routes call the robot StackChan.
+        # Keep the setting field for config compatibility, but do not allow a
+        # stale DOTTY_REALTIME_NAME value to diverge from the local route.
+        name = "StackChan"
         realtime_rules = (
             f"You are speaking directly through a small desktop robot. Your current "
             f"conversational name is {name}. If the base persona uses a different name, "
@@ -385,7 +422,12 @@ class OpenAIRealtimeBridge:
         return {"type": "session.update", "session": session}
 
     async def ensure_connected(self) -> bool:
-        if self._closed or not self.settings.enabled or kid_mode_active():
+        if (
+            self._closed
+            or not self.settings.enabled
+            or kid_mode_active()
+            or requested_voice_profile(self.conn) != "realtime-marin"
+        ):
             return False
         if not self.settings.configured:
             if not self._warned_missing_key:
@@ -584,6 +626,10 @@ class OpenAIRealtimeBridge:
         """Return True when the Realtime route consumed the device message."""
         if not self.settings.enabled:
             return False
+        if requested_voice_profile(self.conn) != "realtime-marin":
+            if self.connected:
+                await self._disconnect(send_device_stop=True)
+            return False
         if kid_mode_active():
             if self.connected:
                 await self._disconnect(send_device_stop=True)
@@ -618,6 +664,14 @@ class OpenAIRealtimeBridge:
             await self.interrupt()
             return False  # let Xiaozhi perform its normal queue/state cleanup too
         return False
+
+    async def refresh_requested_profile(self) -> None:
+        """Apply a dashboard profile transition without waiting for speech."""
+        if (
+            requested_voice_profile(self.conn) != "realtime-marin"
+            or kid_mode_active()
+        ) and self.connected:
+            await self._disconnect(send_device_stop=True)
 
     async def _receive_events(self) -> None:
         try:
@@ -718,6 +772,10 @@ class OpenAIRealtimeBridge:
                 # already streaming. Re-check before every 60 ms frame so the
                 # audio-native path cannot continue past that safety boundary.
                 if kid_mode_active():
+                    await self.interrupt()
+                    self._active_input = False
+                    continue
+                if requested_voice_profile(self.conn) != "realtime-marin":
                     await self.interrupt()
                     self._active_input = False
                     continue
@@ -894,7 +952,7 @@ class OpenAIRealtimeBridge:
             return
         self._owns_voice_route = False
         self.conn.client_abort = False
-        self.conn.close_after_chat = False
+        self.conn.close_after_chat = self._local_close_after_chat
 
     def _drain_output_queue(self) -> None:
         while True:
@@ -948,12 +1006,7 @@ def attach_realtime_bridge(
     if not selected.enabled:
         return None
     bridge = OpenAIRealtimeBridge(conn, selected, **bridge_kwargs)
-    # Realtime owns inactivity once activated. Start with Xiaozhi's local
-    # no-voice timer disarmed so an old local farewell cannot race the first
-    # OpenAI connection handshake. Local fallback re-arms it on real speech.
-    if hasattr(conn, "last_activity_time"):
-        conn.last_activity_time = 0.0
-    conn.close_after_chat = False
+    conn._dotty_realtime_bridge = bridge
     original_route = conn._route_message
 
     async def route_with_realtime(message: str | bytes):

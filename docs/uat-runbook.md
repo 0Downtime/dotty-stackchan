@@ -111,7 +111,7 @@ issues rather than spawning new ones, and their clips are candidate
 | UC4 | Ask for a deliberately long answer (60 s+ TTS), film the whole turn | No reboot; speech plays to the end (battery % may glitch to 255%) | `I2cDevice ReadReg failed` warnings acceptable; **no** `rst:0xc` | QA-only unless the answer is funny |
 | UC5 | Mid-reply, tap the dashboard **abort** (or start a new turn) | Speech stops promptly, robot recovers to listening/idle | abort route hit; TTS queue flushed | "You can interrupt her, she doesn't mind" |
 
-## Phase UT — the eight voice tools
+## Phase UT — the native voice tools
 
 | ID | Brett does (on camera) | Expected — eyes/video | Expected — logs (Claude) | Shorts framing |
 |---|---|---|---|---|
@@ -202,7 +202,7 @@ dashboard works well for Shorts).
 | UD3 | Idle → **Emojis** row: press several of the 9 | Robot's face changes per press | `/ui/actions/mood` | "A remote control for moods" |
 | UD4 | Talk → **Say** box: type a line, send | Robot speaks it verbatim | `/ui/actions/say` (≤500 chars) | "Making my robot say things" — obvious fun |
 | UD5 | Memory card: find UT4's pending kid fact → **approve** it; **redact** another | Pending → approved queue move; redacted fact gone; `recall_person` now sees the approved one | `/ui/actions/memory/{approve,redact}` | QA-critical (human-review loop); clip optional |
-| UD6 | Tools-inventory card | If it lists 5 legacy entries, record presentation FAIL; separately verify Pi registers all 8 voice tools | Pi RPC/tool-startup evidence is authoritative | QA-only |
+| UD6 | Tools-inventory card | If it lists 5 legacy entries, record presentation FAIL; separately verify Pi registers all 8 native voice tools and only the enabled external MCP allowlist | Pi RPC/tool-startup evidence is authoritative | QA-only |
 | UD7 | Safety card after UL2 | The kid-mode filter hit from UL2 listed (last 20) | `/ui/safety/recent` | QA-only |
 | UD8 | Activity feed: cycle All / Turns / Events / Errors chips; open the errors modal | Live SSE turns + perception events streaming; errors modal renders | `/ui/events` SSE + `/api/perception/feed`; `/ui/alerts/detail` | B-roll: the feed scrolling during a chat |
 | UD9 | Perception card + vision modal: open latest photo large, download | Latest VLM photo + description, audio caption, last voice line, scene sentence | `/ui/vision/large`, `/ui/vision/photo?download=1` | "What my robot sees" |

@@ -7,6 +7,8 @@ required — uses a fake PiClient.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sys
 import tempfile
@@ -48,22 +50,39 @@ class FakeClient:
         self.new_session_calls = 0
         self.scripted_chunks: list[list[str]] = []
         self.scripted_errors: list[BaseException | None] = []
+        self.scripted_tool_events: list[list[dict]] = []
         self.closed = False
 
-    def script_turn(self, chunks: list[str], error: BaseException | None = None) -> None:
+    def script_turn(
+        self,
+        chunks: list[str],
+        error: BaseException | None = None,
+        tool_events: list[dict] | None = None,
+    ) -> None:
         self.scripted_chunks.append(chunks)
         self.scripted_errors.append(error)
+        self.scripted_tool_events.append(tool_events or [])
 
     def new_session(self) -> None:
         self.new_session_calls += 1
 
-    def iter_turn_text(self, prompt: str) -> Iterator[str]:
+    def iter_turn_text(
+        self, prompt: str, on_tool_event=None, *, event_callback=None,
+    ) -> Iterator[str]:
         self.prompts.append(prompt)
         chunks = self.scripted_chunks.pop(0) if self.scripted_chunks else []
         err = self.scripted_errors.pop(0) if self.scripted_errors else None
+        events = self.scripted_tool_events.pop(0) if self.scripted_tool_events else []
         if err is not None:
             raise err
+        if on_tool_event is not None:
+            for event in events:
+                on_tool_event(event)
+        if event_callback:
+            event_callback({"type": "model_started", "ts": 1.0})
         for c in chunks:
+            if event_callback:
+                event_callback({"type": "text_delta", "ts": 1.1})
             yield c
 
     def recent_stderr(self) -> list[str]:
@@ -82,7 +101,10 @@ class TestSandwichInjection(unittest.TestCase):
         list(provider.response("sess-1", [{"role": "user", "content": "Hello"}]))
         self.assertEqual(len(client.prompts), 1)
         self.assertTrue(client.prompts[0].startswith("Hello\n\nVOICE TOOL ROUTING:"))
-        self.assertTrue(client.prompts[0].endswith(textUtils.build_turn_suffix(True)))
+        self.assertIn(textUtils.build_turn_suffix(True), client.prompts[0])
+        marker = client.prompts[0].rsplit("[DOTTY_TURN_CONTEXT_V1]", 1)[1]
+        context = json.loads(base64.urlsafe_b64decode(marker + "=" * (-len(marker) % 4)))
+        self.assertEqual(context, {"session": "sess-1", "turn": 1, "utterance": "Hello"})
         # Sanity: the kid-mode-specific bullets must be in the suffix.
         self.assertIn("YOUNG CHILD", client.prompts[0])
         self.assertIn("SELF-HARM EXCEPTION", client.prompts[0])
@@ -94,7 +116,7 @@ class TestSandwichInjection(unittest.TestCase):
         provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
         list(provider.response("sess-1", [{"role": "user", "content": "Hi"}]))
         self.assertTrue(client.prompts[0].startswith("Hi\n\nVOICE TOOL ROUTING:"))
-        self.assertTrue(client.prompts[0].endswith(textUtils.build_turn_suffix(False)))
+        self.assertIn(textUtils.build_turn_suffix(False), client.prompts[0])
         # Adult mode: still has emoji-prefix / English-only / no-Markdown
         # bullets, but NOT the kid-specific ones.
         self.assertIn("EXACTLY ONE emoji", client.prompts[0])
@@ -147,10 +169,37 @@ class TestSandwichInjection(unittest.TestCase):
         fetch.assert_called_once_with("Check your current volume")
         self.assertIn('"volume":70', client.prompts[0])
         self.assertEqual("".join(output), "😊 Volume is 70 percent.")
+    def test_current_stackchan_identity_overrides_earlier_persona(self):
+        wrapped = _wrap_with_sandwich("What is your name?", False)
+        self.assertIn("Your name is StackChan", wrapped)
+        self.assertIn("Refer to yourself only as StackChan", wrapped)
+        self.assertIn("Do not call yourself Dotty", wrapped)
 
     def test_json_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": '{"content": "remember purple"}'}]
         self.assertEqual(_last_user_text(dialogue), "remember purple")
+
+    def test_private_turn_envelope_is_stripped_and_correlated(self):
+        client = FakeClient()
+        client.script_turn(["😊 hello"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        dialogue = [{
+            "role": "user",
+            "content": '{"content":"hello","_dotty_turn_id":"turn-7",'
+                       '"_dotty_request_text":"hello"}',
+        }]
+        with patch("pi_voice.pi_voice._emit_activity_turn") as emit:
+            self.assertEqual(list(provider.response("session-7", dialogue)), ["😊 hello"])
+        self.assertTrue(client.prompts[0].startswith("hello\n\nVOICE TOOL ROUTING:"))
+        self.assertNotIn("_dotty_turn_id", client.prompts[0])
+        phases = [call.args[:2] for call in emit.call_args_list]
+        self.assertIn(("model_started", "turn-7"), phases)
+        self.assertIn(("first_text", "turn-7"), phases)
+        self.assertIn(("response_ready", "turn-7"), phases)
+        response_call = next(
+            call for call in emit.call_args_list if call.args[0] == "response_ready"
+        )
+        self.assertEqual(response_call.kwargs["response_text"], "😊 hello")
 
     def test_mapping_wrapped_user_content_is_unwrapped(self):
         dialogue = [{"role": "user", "content": {"content": "think carefully"}}]
@@ -228,7 +277,7 @@ class TestEmptyTurn(unittest.TestCase):
 
 
 class TestNewSessionLifecycle(unittest.TestCase):
-    def test_same_xiaozhi_session_keeps_pi_context(self):
+    def test_same_xiaozhi_session_preserves_pi_context(self):
         os.environ["DOTTY_KID_MODE"] = "true"
         client = FakeClient()
         client.script_turn(["ok"])
@@ -239,6 +288,33 @@ class TestNewSessionLifecycle(unittest.TestCase):
         list(provider.response("s", [{"role": "user", "content": "b"}]))
         self.assertEqual(client.new_session_calls, 0, "same session keeps context")
 
+    def test_new_xiaozhi_session_resets_pi_context(self):
+        os.environ["DOTTY_KID_MODE"] = "true"
+        client = FakeClient()
+        client.script_turn(["ok"])
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
+        list(provider.response("session-b", [{"role": "user", "content": "b"}]))
+        self.assertEqual(client.new_session_calls, 1)
+
+    def test_disconnect_clears_only_matching_active_session(self):
+        client = FakeClient()
+        client.script_turn(["ok"])
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+
+        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
+        provider.cancel_pending_confirmation("stale-session")
+        self.assertEqual(client.new_session_calls, 0)
+        provider.cancel_pending_confirmation("session-a")
+        self.assertEqual(client.new_session_calls, 1)
+
+        client.script_turn(["ok"])
+        list(provider.response("session-a", [{"role": "user", "content": "b"}]))
+        self.assertEqual(
+            client.new_session_calls, 1,
+            "first turn after disconnect starts from already-reset Pi state",
+        )
     def test_same_xiaozhi_session_resets_after_conversation_idle_timeout(self):
         client = FakeClient()
         client.script_turn(["ok"])
@@ -246,22 +322,10 @@ class TestNewSessionLifecycle(unittest.TestCase):
         provider = LLMProvider(
             {"session_idle_timeout_seconds": 900}, client=client,
         )  # type: ignore[arg-type]
-
-        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 1000.0)):
+        clock = iter((100.0, 1000.0))
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=lambda: next(clock, 1000.0)):
             list(provider.response("same-session", [{"role": "user", "content": "a"}]))
             list(provider.response("same-session", [{"role": "user", "content": "b"}]))
-
-        self.assertEqual(client.new_session_calls, 1)
-
-    def test_changed_xiaozhi_session_resets_pi_context(self):
-        client = FakeClient()
-        client.script_turn(["ok"])
-        client.script_turn(["ok"])
-        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
-
-        list(provider.response("session-a", [{"role": "user", "content": "a"}]))
-        list(provider.response("session-b", [{"role": "user", "content": "b"}]))
-
         self.assertEqual(client.new_session_calls, 1)
 
     def test_missing_session_id_does_not_inherit_known_session(self):
@@ -283,7 +347,8 @@ class TestNewSessionLifecycle(unittest.TestCase):
             {"session_idle_timeout_seconds": 120}, client=client,
         )  # type: ignore[arg-type]
 
-        with patch("pi_voice.pi_voice.time.monotonic", side_effect=(100.0, 221.0)):
+        clock = iter((100.0, 221.0))
+        with patch("pi_voice.pi_voice.time.monotonic", side_effect=lambda: next(clock, 221.0)):
             list(provider.response(None, [{"role": "user", "content": "a"}]))
             list(provider.response(None, [{"role": "user", "content": "b"}]))
 
@@ -322,7 +387,9 @@ class TestNewSessionLifecycle(unittest.TestCase):
                 self.first_started = threading.Event()
                 self.release_first = threading.Event()
 
-            def iter_turn_text(self, prompt: str) -> Iterator[str]:
+            def iter_turn_text(
+                self, prompt: str, on_tool_event=None, *, event_callback=None,
+            ) -> Iterator[str]:
                 self.prompts.append(prompt)
                 self.active += 1
                 self.max_active = max(self.max_active, self.active)
@@ -360,6 +427,50 @@ class TestNewSessionLifecycle(unittest.TestCase):
         self.assertEqual(client.max_active, 1)
         self.assertEqual(len(outputs), 2)
         self.assertEqual(client.new_session_calls, 0)
+class TestHomeAssistantConfirmationSpeech(unittest.TestCase):
+    def test_blocked_first_write_uses_exact_non_model_confirmation_sentence(self):
+        client = FakeClient()
+        client.script_turn(
+            ["😊 I already did it."],
+            tool_events=[{
+                "name": "home_assistant_HassTurnOn",
+                "arguments": {"name": "Kitchen", "domain": "light"},
+                "is_error": True,
+                "result": {"content": [{
+                    "type": "text",
+                    "text": "DOTTY_CONFIRMATION_REQUIRED: Confirm on Kitchen",
+                }]},
+            }],
+        )
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        output = list(provider.response(
+            "session-a",
+            [{"role": "user", "content": "Turn on Kitchen"}],
+        ))
+        self.assertEqual(output, [
+            'Turn on Kitchen? Say "Confirm on Kitchen" within 15 seconds.',
+        ])
+
+    def test_mismatched_confirmation_never_claims_success(self):
+        client = FakeClient()
+        client.script_turn(
+            ["😊 Done."],
+            tool_events=[{
+                "name": "home_assistant_HassTurnOn",
+                "arguments": {"name": "Office"},
+                "is_error": True,
+                "result": {"content": [{
+                    "type": "text",
+                    "text": "DOTTY_CONFIRMATION_MISMATCH: action changed or expired",
+                }]},
+            }],
+        )
+        provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
+        output = list(provider.response(
+            "session-a",
+            [{"role": "user", "content": "Confirm on Kitchen"}],
+        ))
+        self.assertEqual(output, ["😐 Light action cancelled."])
 
 
 class TestErrorFallback(unittest.TestCase):
@@ -369,7 +480,10 @@ class TestErrorFallback(unittest.TestCase):
         client.script_turn([], error=PiClientError("pi crashed"))
         provider = LLMProvider({}, client=client)  # type: ignore[arg-type]
         out = list(provider.response("s", [{"role": "user", "content": "anything"}]))
-        self.assertEqual(out, [f"{textUtils.FALLBACK_EMOJI} (brain offline — try again in a moment)"])
+        self.assertEqual(
+            out,
+            [f"{textUtils.FALLBACK_EMOJI} (brain offline — try again in a moment)"],
+        )
 
 
 class TestLeadingEmojiContract(unittest.TestCase):
@@ -403,8 +517,12 @@ class TestLeadingEmojiContract(unittest.TestCase):
         self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
 
     def test_disallowed_single_codepoint_emoji_is_replaced(self):
-        out = self._response(["😂 Hello"])
+        out = self._response(["🦄 Hello"])
         self.assertEqual("".join(out), f"{textUtils.FALLBACK_EMOJI} Hello")
+
+    def test_new_canonical_face_emoji_is_preserved(self):
+        out = self._response(["😂 Hello"])
+        self.assertEqual("".join(out), "😂 Hello")
 
     def test_empty_model_stream_gets_emoji_fallback(self):
         out = self._response([])

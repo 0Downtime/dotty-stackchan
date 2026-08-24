@@ -17,8 +17,11 @@ import { rememberPersonTool } from "./tools/remember_person.ts";
 import { takePhotoTool } from "./tools/take_photo.ts";
 import { deviceStatusTool } from "./tools/device_status.ts";
 import { thinkHardTool } from "./tools/think_hard.ts";
+import { registerExternalMcp } from "./mcp/external_mcp.ts";
+import { installHomeAssistantConfirmationPolicy } from "./policy/ha_confirmation.ts";
 
 export default function (pi: ExtensionAPI) {
+  installHomeAssistantConfirmationPolicy(pi);
   pi.registerTool(deviceStatusTool);
   pi.registerTool(memoryLookupTool);
   pi.registerTool(recallPersonTool);
@@ -31,6 +34,7 @@ export default function (pi: ExtensionAPI) {
   // PiVoiceLLM voice path (the old bridge.py /api/voice/memory_log endpoint
   // was retired with the #36 cutover).
   pi.on("agent_end", logTurnEnd);
+  registerExternalMcp(pi);
   // set_led is intentionally absent: the LED ring is reserved for
   // mode/state indication, not voice-driven; see README.md "Not a tool".
 }

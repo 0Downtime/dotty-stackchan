@@ -321,7 +321,7 @@ class ProactiveGreeter:
                     )
 
         return (
-            f"You are Dotty, a friendly home robot. {addressee} just "
+            f"You are StackChan, a friendly home robot. {addressee} just "
             f"walked into the room. The time of day is {window}.\n"
             f"{persona_line}"
             f"{birthday_line}"

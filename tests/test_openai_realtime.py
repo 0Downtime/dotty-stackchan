@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -158,7 +159,7 @@ def _settings(**overrides):
         "api_key": "secret-test-key",
         "model": "gpt-realtime-2.1-mini",
         "voice": "marin",
-        "name": "Dotty",
+        "name": "StackChan",
         "transcription_model": "gpt-live-transcribe",
         "reasoning_effort": "low",
         "connect_timeout_seconds": 1,
@@ -170,11 +171,22 @@ def _settings(**overrides):
 
 class TestOpenAIRealtime(unittest.TestCase):
     def setUp(self):
+        self.state_dir = tempfile.TemporaryDirectory()
+        self.face_bundle_state = Path(self.state_dir.name) / "face-bundles.json"
+        self.face_bundle_state.write_text(json.dumps({
+            "version": 1,
+            "devices": {
+                "device-private-id": {
+                    "requested_voice_profile": "realtime-marin",
+                }
+            },
+        }))
         self.env = patch.dict(
             os.environ,
             {
                 "DOTTY_KID_MODE": "false",
                 "DOTTY_KID_MODE_STATE": "/private/tmp/dotty-test-kid-mode-missing",
+                "DOTTY_FACE_BUNDLE_STATE": str(self.face_bundle_state),
             },
             clear=False,
         )
@@ -182,6 +194,7 @@ class TestOpenAIRealtime(unittest.TestCase):
 
     def tearDown(self):
         self.env.stop()
+        self.state_dir.cleanup()
 
     def test_settings_do_not_reveal_api_key(self):
         settings = _settings(codex_broker_token="codex-broker-secret")
@@ -236,7 +249,7 @@ class TestOpenAIRealtime(unittest.TestCase):
         self.assertNotIn("transcription", session["audio"]["input"])
         self.assertEqual(session["output_modalities"], ["audio"])
 
-    def test_realtime_name_overrides_base_persona_identity(self):
+    def test_stackchan_identity_overrides_base_persona_and_stale_setting(self):
         conn = _Connection()
         bridge = _MODULE.OpenAIRealtimeBridge(
             conn,
@@ -244,8 +257,20 @@ class TestOpenAIRealtime(unittest.TestCase):
             codec_factory=_Codec,
         )
         instructions = bridge._instructions()
-        self.assertIn("current conversational name is ESP", instructions)
-        self.assertIn("If asked your name, answer ESP", instructions)
+        self.assertIn("current conversational name is StackChan", instructions)
+        self.assertIn("If asked your name, answer StackChan", instructions)
+        self.assertNotIn("current conversational name is ESP", instructions)
+
+    def test_realtime_default_name_is_stackchan(self):
+        conn = _Connection()
+        bridge = _MODULE.OpenAIRealtimeBridge(
+            conn,
+            _settings(),
+            codec_factory=_Codec,
+        )
+        instructions = bridge._instructions()
+        self.assertIn("current conversational name is StackChan", instructions)
+        self.assertIn("If asked your name, answer StackChan", instructions)
 
     def test_kid_mode_fails_closed_to_original_route(self):
         async def run():
@@ -322,7 +347,7 @@ class TestOpenAIRealtime(unittest.TestCase):
                 connect_factory=connect,
                 codec_factory=lambda: codec,
             )
-            self.assertEqual(conn.last_activity_time, 0.0)
+            self.assertEqual(conn.last_activity_time, 12345.0)
             conn.close_after_chat = True
             conn.client_is_speaking = True
             await conn._route_message(json.dumps({"type": "listen", "state": "start"}))
@@ -353,6 +378,31 @@ class TestOpenAIRealtime(unittest.TestCase):
             self.assertIn("do not speak or output an emoji", session["instructions"])
             await bridge.close()
             self.assertFalse(conn.client_abort)
+
+        asyncio.run(run())
+
+    def test_switching_to_local_profile_tears_down_realtime_session(self):
+        async def run():
+            conn = _Connection()
+            upstream = _RealtimeWebSocket()
+
+            async def connect(_url, _headers):
+                return upstream
+
+            bridge = _MODULE.OpenAIRealtimeBridge(
+                conn, _settings(), connect_factory=connect, codec_factory=_Codec,
+            )
+            self.assertTrue(await bridge.ensure_connected())
+            self.face_bundle_state.write_text(json.dumps({
+                "version": 1,
+                "devices": {
+                    conn.device_id: {"requested_voice_profile": "local-cori"}
+                },
+            }))
+            await bridge.refresh_requested_profile()
+            self.assertFalse(bridge.connected)
+            self.assertTrue(upstream.closed)
+            await bridge.close()
 
         asyncio.run(run())
 

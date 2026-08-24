@@ -94,7 +94,7 @@ def compose_scene_synthesis(
     ts_label = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
     parts: list[str] = [f"{ts_label} — {face_phrase}"]
     if vision_desc:
-        parts.append(f"Dotty sees {vision_desc.rstrip('.')}.")
+        parts.append(f"StackChan sees {vision_desc.rstrip('.')}.")
     if audio_desc:
         parts.append(f"Heard: {audio_desc.rstrip('.')}.")
     parts.append(f"State: {current_state}.")

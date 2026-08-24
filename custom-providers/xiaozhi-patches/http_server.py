@@ -13,6 +13,17 @@ from core.portal_bridge import active_connections as _dotty_active_connections
 # envelope + per-conn serialized sends live in one module shared with
 # receiveAudioHandle.py (mounted at core/utils/device_command.py).
 from core.utils import device_command as _dotty_device_command
+try:
+    from core.utils.textUtils import FACE_EMOJI_BY_ID
+except ImportError:  # standalone source/unit-test loading outside container
+    FACE_EMOJI_BY_ID = dict((face_id, emoji) for emoji, face_id in (
+        ("😶", "neutral"), ("🙂", "happy"), ("😆", "laughing"), ("😂", "funny"),
+        ("😔", "sad"), ("😠", "angry"), ("😭", "crying"), ("😍", "loving"),
+        ("😳", "embarrassed"), ("😲", "surprised"), ("😱", "shocked"),
+        ("🤔", "thinking"), ("😉", "winking"), ("😎", "cool"), ("😌", "relaxed"),
+        ("🤤", "delicious"), ("😘", "kissy"), ("😏", "confident"),
+        ("😴", "sleepy"), ("😜", "silly"), ("🙄", "confused"),
+    ))
 
 TAG = __name__
 
@@ -245,6 +256,39 @@ class SimpleHttpServer:
         """GET /xiaozhi/admin/devices — list connected device-ids."""
         return web.json_response({"devices": list(_dotty_active_connections)})
 
+    async def _dotty_set_emotion(self, request: "web.Request") -> "web.Response":
+        """Send one validated canonical face frame directly to the device."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": "JSON object required"}, status=400)
+        emotion = (data.get("emotion") or "").strip()
+        device_id = (data.get("device_id") or "").strip()
+        emoji = FACE_EMOJI_BY_ID.get(emotion)
+        if emoji is None:
+            return web.json_response(
+                {"error": "unknown emotion", "allowed": list(FACE_EMOJI_BY_ID)},
+                status=400,
+            )
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        frame = {
+            "type": "llm",
+            "text": emoji,
+            "emotion": emotion,
+            "session_id": getattr(conn, "session_id", ""),
+        }
+        await _dotty_device_command.send_serialized(conn, __import__("json").dumps(frame))
+        return web.json_response({
+            "ok": True,
+            "device_id": _dotty_conn_device_id(conn, device_id),
+            "emotion": emotion,
+            "emoji": emoji,
+        })
+
     async def _dotty_device_status(self, request: "web.Request") -> "web.Response":
         """POST /xiaozhi/admin/device-status
 
@@ -413,6 +457,58 @@ class SimpleHttpServer:
             "ok": True,
             "device_id": _dotty_conn_device_id(conn, device_id),
             "name": name, "enabled": enabled,
+        })
+
+    async def _dotty_set_face_pack(self, request: "web.Request") -> "web.Response":
+        """POST /xiaozhi/admin/set-face-pack
+        Body: {"device_id": "<optional>", "pack_id": "<installed pack>"}
+
+        Queue the firmware MCP switch. The device emits face_pack_changed when
+        activation has completed; until then status remains pending.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        device_id = (data.get("device_id") or "").strip()
+        pack_id = (data.get("pack_id") or "").strip()
+        if pack_id not in ("classic", "crt-pixel", "aussie-host", "kid-bot"):
+            return web.json_response({"error": f"unknown face pack: {pack_id!r}"}, status=400)
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        resolved_id = _dotty_conn_device_id(conn, device_id)
+        conn._dotty_requested_face_pack = pack_id
+        conn._dotty_face_pack_pending = True
+        _spawn(
+            _dotty_device_command.call_tool(
+                conn, "self.robot.set_face_pack", {"pack_id": pack_id},
+            ),
+            name="set_face_pack_send",
+        )
+        realtime_bridge = getattr(conn, "_dotty_realtime_bridge", None)
+        if realtime_bridge is not None:
+            _spawn(
+                realtime_bridge.refresh_requested_profile(),
+                name="refresh_realtime_voice_profile",
+            )
+        return web.json_response(
+            {"ok": True, "device_id": resolved_id, "pack_id": pack_id, "pending": True},
+            status=202,
+        )
+
+    async def _dotty_face_pack_status(self, request: "web.Request") -> "web.Response":
+        device_id = (request.query.get("device_id") or "").strip()
+        conn, err = _dotty_resolve_conn(device_id)
+        if err is not None:
+            return err
+        return web.json_response({
+            "device_id": _dotty_conn_device_id(conn, device_id),
+            "requested_face_pack_id": getattr(conn, "_dotty_requested_face_pack", ""),
+            "active_face_pack_id": getattr(conn, "_dotty_active_face_pack", ""),
+            "pending": bool(getattr(conn, "_dotty_face_pack_pending", False)),
+            "success": bool(getattr(conn, "_dotty_face_pack_success", True)),
+            "reason": getattr(conn, "_dotty_face_pack_reason", ""),
         })
 
     async def _dotty_set_face_identified(self, request: "web.Request") -> "web.Response":
@@ -865,6 +961,14 @@ class SimpleHttpServer:
                             self._dotty_set_toggle,
                         ),
                         web.post(
+                            "/xiaozhi/admin/set-face-pack",
+                            self._dotty_set_face_pack,
+                        ),
+                        web.get(
+                            "/xiaozhi/admin/face-pack-status",
+                            self._dotty_face_pack_status,
+                        ),
+                        web.post(
                             "/xiaozhi/admin/set-face-identified",
                             self._dotty_set_face_identified,
                         ),
@@ -891,6 +995,10 @@ class SimpleHttpServer:
                         web.post(
                             "/xiaozhi/admin/say",
                             self._dotty_say,
+                        ),
+                        web.post(
+                            "/xiaozhi/admin/set-emotion",
+                            self._dotty_set_emotion,
                         ),
                     ]
                 )

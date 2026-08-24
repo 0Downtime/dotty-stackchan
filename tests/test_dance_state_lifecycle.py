@@ -134,10 +134,12 @@ class TestDanceStateLifecycle(unittest.TestCase):
                 self.assertFalse(target.client_abort)
                 return False
 
-            def inspect_submit(target, text):
+            def inspect_submit(target, text, **kwargs):
                 events.append("submit")
                 self.assertFalse(target.client_abort)
                 self.assertEqual(text, "hello")
+                self.assertIn("turn_id", kwargs)
+                self.assertEqual(kwargs["request_text"], "hello")
 
             with (
                 patch.object(_module, "_sync_toggles_once", new=AsyncMock()),

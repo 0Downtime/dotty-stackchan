@@ -54,6 +54,7 @@ services:
       # mounted from /mnt/user/appdata/dotty-bridge/{state,logs}.
       - DOTTY_KID_MODE_STATE=/var/lib/dotty-bridge/state/kid-mode
       - DOTTY_SMART_MODE_STATE=/var/lib/dotty-bridge/state/smart-mode
+      - DOTTY_FACE_BUNDLE_STATE=/var/lib/dotty-bridge/state/face-bundles.json
       - CONVO_LOG_DIR=/var/lib/dotty-bridge/logs
       # Household roster used for face-name greeting + per-person calendar
       # bucketing. Defaults to ~/.zeroclaw/household.yaml on the legacy

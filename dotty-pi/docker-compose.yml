@@ -25,6 +25,8 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      MCP_UI_VIEWER: "none"
     volumes:
       - /mnt/user/appdata/dotty-pi:/root/.pi
     command: ["sleep", "infinity"]

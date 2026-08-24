@@ -111,7 +111,7 @@ Symptom-first lookup table covering common and obscure failure modes. Pair with 
 
 **Fix:**
 1. Check the xiaozhi-server logs for the raw LLM response. PiVoiceLLM's per-turn suffix requests an allowed emoji and `_enforce_leading_emoji()` prepends neutral `😐` when it is absent. A prefix-free response therefore indicates the deployed provider is stale or bypassed.
-2. If the response has an emoji but the face doesn't change, it may be an unsupported emoji. Only the nine listed above are mapped to animations.
+2. If the response has an emoji but the face doesn't change, compare it with the canonical 21-face catalog in `docs/emoji-mapping.md`; four legacy aliases are also accepted.
 3. Confirm the selected provider is PiVoiceLLM and the deployed `pi_voice.py` contains `_enforce_leading_emoji()`. The retired bridge fallback is unrelated.
 
 ---

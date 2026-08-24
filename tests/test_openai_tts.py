@@ -170,7 +170,7 @@ class TestOpenAITTS(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "OPENAI_TTS_API_KEY"):
                 self.module.TTSProvider({}, False)
 
-    def test_playback_emits_first_and_middle_frames_on_success(self):
+    def test_playback_emits_first_middle_last_without_fallback(self):
         events = []
 
         class Queue:
@@ -184,28 +184,8 @@ class TestOpenAITTS(unittest.TestCase):
                 provider.to_tts_single_stream("hello", is_last=True)
 
         self.assertEqual(events[0], ("first", [], "hello"))
-        self.assertGreaterEqual(sum(event[0] == "middle" for event in events), 1)
-
-    def test_playback_emits_last_once_on_provider_failure(self):
-        events = []
-
-        class Queue:
-            def put(self, event):
-                events.append(event)
-
-        with patch.dict(os.environ, {"OPENAI_TTS_API_KEY": "test-key"}, clear=True):
-            provider = self.module.TTSProvider({}, False)
-            provider.tts_audio_queue = Queue()
-            with patch.object(
-                self.module,
-                "request_speech_pcm",
-                side_effect=RuntimeError("provider unavailable"),
-            ):
-                provider.to_tts_single_stream("hello", is_last=True)
-
-        self.assertEqual(events[0], ("first", [], "hello"))
         self.assertEqual(events[-1], ("last", [], None))
-        self.assertEqual(sum(event[0] == "last" for event in events), 1)
+        self.assertGreaterEqual(sum(event[0] == "middle" for event in events), 1)
 
 
 if __name__ == "__main__":

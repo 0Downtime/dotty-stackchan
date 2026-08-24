@@ -15,6 +15,7 @@ import asyncio
 
 import config
 from consumers import (
+    ActivityForwarder,
     DanceReflector,
     FaceGreeter,
     FaceIdentifiedRefresher,
@@ -169,6 +170,17 @@ async def lifespan(app: FastAPI):
             duration_sec=config.PURR_DURATION_SEC,
         ),
     ]
+    if config.ACTIVITY_ENABLED and config.ACTIVITY_URL:
+        consumers.append(
+            ActivityForwarder(
+                state,
+                config.ACTIVITY_URL,
+                token=config.ACTIVITY_TOKEN,
+                timeout_sec=config.ACTIVITY_TIMEOUT_SEC,
+            )
+        )
+    else:
+        log.info("activity forwarder disabled by DOTTY_ACTIVITY_ENABLED")
     if config.WAKE_TURN_ENABLED:
         consumers.append(
             WakeWordTurner(

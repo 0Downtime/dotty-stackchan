@@ -1,0 +1,8 @@
+{% if ok %}
+<div class="alert {{ 'alert-warning' if pending else 'alert-success' }} py-2 text-sm"
+     hx-get="/ui/face-bundles" hx-trigger="load delay:600ms" hx-target="#face-bundles-card" hx-swap="innerHTML">
+  <span>{% if pending %}Bundle saved; waiting for the device to confirm.{% else %}Bundle applied.{% endif %}{% if warning %} {{ warning }}{% endif %}</span>
+</div>
+{% else %}
+<div class="alert alert-error py-2 text-sm"><span>{{ error }}</span></div>
+{% endif %}

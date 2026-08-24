@@ -85,7 +85,9 @@ help: ## Show this help
 # ─────────────────────────────────────────────────────────────────────
 test: ## Run Python unit tests with coverage gate
 	pytest tests/ custom-providers/pi_voice/tests/ \
-		--cov --cov-report=term --cov-fail-under=56
+		--cov --cov-report=
+	pytest dotty-behaviour/tests/ \
+		--cov=dotty-behaviour --cov-append --cov-report=term --cov-fail-under=56
 
 lint: ## Run ruff lint over the repo
 	ruff check .
@@ -131,7 +133,7 @@ setup: _preflight-compose ## Interactive first-run wizard (re-runnable; remember
 	   printf -v "$$var" '%s' "$$ans"; \
 	 }; \
 	 prompt XIAOZHI_HOST    "XIAOZHI_HOST     (LAN IP of Docker host)" "192.168.1.10"  "$$XIAOZHI_HOST"; \
-	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "Dotty"   "$${ROBOT_NAME:-Dotty}"; \
+	 prompt ROBOT_NAME      "ROBOT_NAME       (what the robot calls itself)" "StackChan" "$${ROBOT_NAME:-StackChan}"; \
 	 prompt YOUR_NAME       "YOUR_NAME        (your name / org)" "Brett"               "$$YOUR_NAME"; \
 	 prompt TZ_VALUE        "TZ_VALUE         (IANA timezone)" "Australia/Brisbane"    "$$TZ_VALUE"; \
 	 echo ""; \

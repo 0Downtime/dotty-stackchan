@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -42,6 +43,7 @@ from textUtils import (  # noqa: F401  (re-exported for downstream tools)
 )
 
 from bridge.csrf import CSRFMiddleware
+from bridge.activity import ActivityEnvelope, activity_store
 from bridge.text import (  # noqa: F401  (used by bridge.dashboard via re-imports)
     CONTENT_FILTER_REPLACEMENT,
     MAX_SENTENCES,
@@ -851,6 +853,30 @@ def _admin_require_localhost(request: Request) -> None:
         raise HTTPException(status_code=403, detail="admin endpoints are localhost-only")
 
 
+def _admin_require_activity_access(request: Request) -> None:
+    """Allow loopback, or a container peer presenting the shared token.
+
+    The dashboard uses host networking while xiaozhi-server is bridge-
+    networked, so its authenticated request does not appear as 127.0.0.1.
+    Without a configured token the endpoint remains strictly loopback-only.
+    """
+    host = request.client.host if request.client else ""
+    if _ADMIN_TOKEN:
+        supplied = request.headers.get("X-Admin-Token", "").strip()
+        try:
+            matches = secrets.compare_digest(supplied.encode(), _ADMIN_TOKEN.encode())
+        except (TypeError, UnicodeError):
+            matches = False
+        if not matches:
+            raise HTTPException(status_code=401, detail="invalid activity token")
+        return
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=403,
+            detail="activity endpoint requires loopback or DOTTY_ADMIN_TOKEN",
+        )
+
+
 class _AdminKidModeIn(BaseModel):
     enabled: bool
     device_id: str = ""
@@ -879,6 +905,18 @@ class _AdminSafetyIn(BaseModel):
 _admin_router = APIRouter(
     prefix="/admin", dependencies=[Depends(_admin_require_localhost)],
 )
+
+
+_activity_router = APIRouter(
+    prefix="/admin", dependencies=[Depends(_admin_require_activity_access)],
+)
+
+
+@_activity_router.post("/activity")
+async def _admin_activity(payload: ActivityEnvelope) -> dict:
+    """Ingest one sanitized lifecycle/perception event for the dashboard."""
+    item = activity_store.ingest(payload)
+    return {"ok": True, "duplicate": item is None}
 
 
 @_admin_router.post("/kid-mode")
@@ -1001,6 +1039,7 @@ async def _admin_safety(payload: _AdminSafetyIn) -> dict:
 
 
 app.include_router(_admin_router)
+app.include_router(_activity_router)
 
 
 if __name__ == "__main__":

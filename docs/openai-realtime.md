@@ -50,7 +50,7 @@ OPENAI_API_KEY=your-deployment-secret
 DOTTY_REALTIME_MODEL=gpt-realtime-2.1-mini
 DOTTY_REALTIME_VOICE=marin
 # Optional conversational identity; useful when matching a temporary wake phrase.
-DOTTY_REALTIME_NAME=Dotty
+DOTTY_REALTIME_NAME=StackChan
 DOTTY_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
 DOTTY_REALTIME_REASONING_EFFORT=low
 ```

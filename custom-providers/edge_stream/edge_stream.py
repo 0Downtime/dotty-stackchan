@@ -12,12 +12,13 @@ from core.providers.tts.base import TTSProviderBase
 from core.providers.tts.dto.dto import ContentType, InterfaceType, SentenceType
 from core.utils import opus_encoder_utils, textUtils
 from core.utils.tts import MarkdownCleaner
+from core.utils.activity_tts import ActivityPlaybackMixin
 
 TAG = __name__
 logger = setup_logging()
 
 
-class TTSProvider(TTSProviderBase):
+class TTSProvider(ActivityPlaybackMixin, TTSProviderBase):
     def __init__(self, config, delete_audio_file):
         super().__init__(config, delete_audio_file)
         self.interface_type = InterfaceType.SINGLE_STREAM
@@ -36,6 +37,16 @@ class TTSProvider(TTSProviderBase):
         while not self.conn.stop_event.is_set():
             try:
                 message = self.tts_text_queue.get(timeout=1)
+                if message.sentence_type == SentenceType.FIRST:
+                    self.current_sentence_id = message.sentence_id
+                    self.activity_bind_sentence(message.sentence_id)
+                if (
+                    self.conn.client_abort
+                    or message.sentence_id != self.conn.sentence_id
+                ):
+                    if message.sentence_type == SentenceType.FIRST:
+                        self.activity_abort_sentence(message.sentence_id)
+                    continue
                 if message.sentence_type == SentenceType.FIRST:
                     self.tts_stop_request = False
                     self.processed_chars = 0
@@ -97,8 +108,12 @@ class TTSProvider(TTSProviderBase):
         )
 
         try:
+            self.activity_tts_started(getattr(self, "current_sentence_id", None))
             self.pcm_buffer.clear()
-            self.tts_audio_queue.put((SentenceType.FIRST, [], text))
+            self.tts_audio_queue.put((
+                SentenceType.FIRST, [], text,
+                getattr(self, "current_sentence_id", None),
+            ))
 
             mp3_buffer = bytearray()
             communicate = edge_tts.Communicate(text, voice=self.voice)
@@ -140,7 +155,11 @@ class TTSProvider(TTSProviderBase):
             logger.bind(tag=TAG).error(
                 f"Edge stream synth exception for {text!r}: {e}"
             )
-            self.tts_audio_queue.put((SentenceType.LAST, [], None))
+            self.activity_tts_failed(getattr(self, "current_sentence_id", None), e)
+            self.tts_audio_queue.put((
+                SentenceType.LAST, [], None,
+                getattr(self, "current_sentence_id", None),
+            ))
 
     async def close(self):
         await super().close()
