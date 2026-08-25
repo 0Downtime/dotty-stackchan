@@ -9,8 +9,8 @@
          was removed in the 2026-05-29 alignment pass; smart_mode now just
          lights the robot's smart-mode LED + persists the flag. #}
       <div class="text-xs text-base-content/60 mt-0.5">
-        Robot smart-mode pip {{ "on" if enabled else "off" }}
-        <span class="text-base-content/40">· model-swap pending (v2)</span>
+        Robot mode {{ "on" if enabled else "off" }}
+        <span class="text-base-content/40">· model swap pending</span>
       </div>
     </div>
     <input type="hidden" name="enabled" value="{{ 'false' if enabled else 'true' }}">

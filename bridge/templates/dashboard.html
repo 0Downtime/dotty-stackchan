@@ -17,7 +17,7 @@
         integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
         crossorigin="anonymous" defer></script>
 <link href="/ui/static/tailwind.min.css" rel="stylesheet"
-      integrity="sha384-EN+qoJQQ/S6PWqDSsLL/Q0nVNcadxFqQdluflTVYakNeAJTf3LdiB9arueL3wYdR"
+      integrity="sha384-NaxKm63KqM0lMHbsK8+uxN3DRW/ijR9lLTy5xSqRs+ioY5LUWbRJbd9DN6VKWPjK"
       crossorigin="anonymous">
 <style>
   html, body { -webkit-tap-highlight-color: transparent; }
@@ -55,6 +55,29 @@
   html { height: 100%; }
   body.dotty-body { min-height: 100%; display: flex; flex-direction: column; }
   main.dotty-main { display: flex; flex-direction: column; gap: 1.5rem; }
+  .dotty-section { scroll-margin-top: 5.5rem; }
+  .dotty-section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 1rem; margin-bottom: 0.75rem; padding: 0 0.25rem;
+  }
+  .dotty-section-kicker {
+    color: oklch(var(--bc) / 0.55); font-size: 0.68rem;
+    font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .dotty-section-title { font-size: 1rem; font-weight: 700; line-height: 1.25; }
+  .dotty-menu summary { list-style: none; }
+  .dotty-menu summary::-webkit-details-marker { display: none; }
+  .dotty-menu > li > details > summary { border-radius: 0.5rem; }
+  .dotty-menu > li > details[open] > summary { background: oklch(var(--b2)); }
+  .dotty-menu .menu-title { padding: 0.45rem 0.75rem 0.25rem; }
+  .dotty-menu .menu-title:not(:first-child) { margin-top: 0.35rem; }
+  .dotty-collapse-summary { cursor: pointer; list-style: none; }
+  .dotty-collapse-summary::-webkit-details-marker { display: none; }
+  .dotty-collapse-summary::after {
+    content: '›'; color: oklch(var(--bc) / 0.45); font-size: 1.25rem;
+    line-height: 1; transition: transform 150ms ease;
+  }
+  details[open] > .dotty-collapse-summary::after { transform: rotate(90deg); }
   .dotty-feed-section > .card > .card-body { display: flex; flex-direction: column; }
   .dotty-feed-scroll {
     max-height: 70vh; min-height: 12rem;
@@ -84,9 +107,11 @@
 
 <header class="navbar bg-base-100 sticky top-0 z-20 shadow-sm safe-top gap-2 flex-none">
   <div class="flex-1 px-2 flex items-center gap-3 min-w-0">
-    <svg class="w-9 h-9 flex-shrink-0" aria-hidden="true"><use href="#dotty-icon"/></svg>
-    <span class="text-lg font-semibold tracking-tight">Dotty</span>
-    <span class="text-sm text-base-content/40 hidden sm:inline -ml-1">Dashboard</span>
+    <a href="#overview" class="flex items-center gap-3 min-w-0" aria-label="Dotty overview">
+      <svg class="w-9 h-9 flex-shrink-0" aria-hidden="true"><use href="#dotty-icon"/></svg>
+      <span class="text-lg font-semibold tracking-tight">Dotty</span>
+    </a>
+    <span class="text-sm text-base-content/40 hidden sm:inline">Bridge</span>
     <span id="status-strip-header" data-poll
           hx-get="/ui/status-strip?placement=header"
           hx-trigger="load, every 10s, dotty-refresh from:window"
@@ -95,6 +120,46 @@
           class="ml-2 inline-flex items-center"></span>
   </div>
   <div class="flex-none flex items-center gap-2">
+    <details class="dropdown dropdown-end">
+      <summary class="btn btn-ghost btn-sm gap-2" aria-label="Open dashboard menu">
+        <span aria-hidden="true">☰</span>
+        <span class="hidden sm:inline">Menu</span>
+      </summary>
+      <ul class="menu dropdown-content bg-base-100 rounded-box z-50 mt-2 w-64 p-2 shadow-xl border border-base-300 dotty-menu">
+        <li class="menu-title">Dashboard</li>
+        <li><a href="#overview"><span aria-hidden="true">⌂</span> Overview <span class="badge badge-xs badge-ghost ml-auto">live</span></a></li>
+        <li>
+          <details>
+            <summary><span aria-hidden="true">✦</span> Control</summary>
+            <ul>
+              <li><a href="#control-section">Modes &amp; state</a></li>
+              <li><a href="#state-controls">Quick actions</a></li>
+            </ul>
+          </details>
+        </li>
+        <li>
+          <details>
+            <summary><span aria-hidden="true">◉</span> Observe</summary>
+            <ul>
+              <li><a href="#observe-section">Perception</a></li>
+              <li><a href="#activity-section">Activity</a></li>
+              <li><a href="#memory-card-body">Memory</a></li>
+              <li><a href="#safety-card">Safety log</a></li>
+            </ul>
+          </details>
+        </li>
+        <li>
+          <details>
+            <summary><span aria-hidden="true">⚙</span> System</summary>
+            <ul>
+              <li><a href="#system-section">Face &amp; voice</a></li>
+              <li><a href="#tts-provider-card-body">TTS provider</a></li>
+              <li><a href="#tools-card">Voice tools</a></li>
+            </ul>
+          </details>
+        </li>
+      </ul>
+    </details>
     <span id="version-chip-wrap"
           hx-get="/ui/version-chip"
           hx-trigger="load, every 600s"
@@ -116,9 +181,16 @@
   <span id="connection-banner-msg" class="text-sm"></span>
 </div>
 
-<main class="dotty-main p-4 max-w-5xl w-full mx-auto">
+<main id="overview" class="dotty-main p-4 max-w-5xl w-full mx-auto">
 
-  <section>
+  <section id="control-section" class="dotty-section">
+    <div class="dotty-section-head">
+      <div>
+        <div class="dotty-section-kicker">Control</div>
+        <h1 class="dotty-section-title">Run Dotty</h1>
+      </div>
+      <span class="text-xs text-base-content/50">modes, state, actions</span>
+    </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <div id="kid-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
            hx-get="/ui/kid-mode" hx-trigger="load, every 10s, dotty-refresh from:window" hx-sync="this:drop" hx-swap="innerHTML"
@@ -137,33 +209,12 @@
     </div>
   </section>
 
-  <section>
-    <div id="face-bundles-card"
-         hx-get="/ui/face-bundles"
-         hx-trigger="load, every 10s, dotty-refresh from:window"
-         hx-sync="this:drop" hx-swap="innerHTML" hx-target="this"
-         class="card bg-base-100 shadow-sm overflow-hidden">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/3"></div>
-      </div>
-    </div>
-    <div id="tts-provider-card-body" class="card bg-base-100 shadow-sm overflow-hidden mt-3"
-         hx-get="/ui/tts-provider"
-         hx-trigger="load, every 10s, dotty-refresh from:window"
-         hx-sync="this:drop"
-         hx-swap="innerHTML" hx-target="this">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/4"></div>
-      </div>
-    </div>
-  </section>
-
   {# Combined State card. Top half = state selector (loaded from /ui/state).
      Bottom half = state-conditional content; exactly one inner section is
      visible at a time, flipped by the `dotty-state-change` listener below.
      They share one `.card` shell so the buttons + contextual UI read as a
      single connected surface, divided by a thin rule. #}
-  <section>
+  <section id="state-controls" class="dotty-section">
     <div class="card bg-base-100 shadow-sm overflow-hidden">
       <div id="state-card-body"
            hx-get="/ui/state" hx-trigger="load, every 10s, dotty-refresh from:window" hx-sync="this:drop" hx-swap="innerHTML"
@@ -271,56 +322,113 @@
     </div>
   </section>
 
-  <section>
-    <div id="perception-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
-         hx-get="/ui/perception"
-         hx-trigger="load, dotty-refresh from:window"
-         hx-swap="outerHTML" hx-target="this">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/4"></div>
+  <section id="system-section" class="dotty-section">
+    <div class="dotty-section-head">
+      <div>
+        <div class="dotty-section-kicker">System</div>
+        <h2 class="dotty-section-title">Face &amp; voice</h2>
+      </div>
+      <span class="text-xs text-base-content/50">appearance and audio</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div id="face-bundles-card"
+           hx-get="/ui/face-bundles"
+           hx-trigger="load, every 10s, dotty-refresh from:window"
+           hx-sync="this:drop" hx-swap="innerHTML" hx-target="this"
+           class="card bg-base-100 shadow-sm overflow-hidden">
+        <div class="card-body p-3 animate-pulse">
+          <div class="h-4 bg-base-300 rounded w-1/3"></div>
+        </div>
+      </div>
+      <div class="flex flex-col gap-3">
+        <div id="tts-provider-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
+             hx-get="/ui/tts-provider"
+             hx-trigger="load, every 10s, dotty-refresh from:window"
+             hx-sync="this:drop"
+             hx-swap="innerHTML" hx-target="this">
+          <div class="card-body p-3 animate-pulse">
+            <div class="h-4 bg-base-300 rounded w-1/4"></div>
+          </div>
+        </div>
+        <details id="tools-card" class="card bg-base-100 shadow-sm overflow-hidden">
+          <summary class="dotty-collapse-summary card-body p-3 flex items-center justify-between gap-3">
+            <span>
+              <span class="font-semibold text-sm block">Voice tools</span>
+              <span class="text-xs text-base-content/50">available to Dotty</span>
+            </span>
+            <span class="badge badge-ghost badge-xs">advanced</span>
+          </summary>
+          <div id="tools-inventory-card-body"
+               hx-get="/ui/tools-inventory"
+               hx-trigger="load"
+               hx-sync="this:drop"
+               hx-swap="innerHTML" hx-target="this">
+            <div class="card-body p-3 animate-pulse">
+              <div class="h-4 bg-base-300 rounded w-1/4"></div>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </section>
 
-  <section>
-    <div id="memory-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
-         hx-get="/ui/memory"
-         hx-trigger="load, every 30s, dotty-refresh from:window"
-         hx-sync="this:drop"
-         hx-swap="innerHTML" hx-target="this">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/4"></div>
+  <section id="observe-section" class="dotty-section">
+    <div class="dotty-section-head">
+      <div>
+        <div class="dotty-section-kicker">Observe</div>
+        <h2 class="dotty-section-title">What Dotty knows</h2>
       </div>
+      <span class="text-xs text-base-content/50">live context and review</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div id="perception-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
+           hx-get="/ui/perception"
+           hx-trigger="load, dotty-refresh from:window"
+           hx-swap="outerHTML" hx-target="this">
+        <div class="card-body p-3 animate-pulse">
+          <div class="h-4 bg-base-300 rounded w-1/4"></div>
+        </div>
+      </div>
+
+      <div id="memory-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
+           hx-get="/ui/memory"
+           hx-trigger="load, every 30s, dotty-refresh from:window"
+           hx-sync="this:drop"
+           hx-swap="innerHTML" hx-target="this">
+        <div class="card-body p-3 animate-pulse">
+          <div class="h-4 bg-base-300 rounded w-1/4"></div>
+        </div>
+      </div>
+
+      <details id="safety-card" class="card bg-base-100 shadow-sm overflow-hidden">
+        <summary class="dotty-collapse-summary card-body p-3 flex items-center justify-between gap-3">
+          <span>
+            <span class="font-semibold text-sm block">Safety log</span>
+            <span class="text-xs text-base-content/50">recent content-filter activity</span>
+          </span>
+          <span class="badge badge-ghost badge-xs">review</span>
+        </summary>
+        <div id="safety-card-body"
+             hx-get="/ui/safety/recent"
+             hx-trigger="load, every 30s, dotty-refresh from:window"
+             hx-sync="this:drop"
+             hx-swap="innerHTML" hx-target="this">
+          <div class="card-body p-3 animate-pulse">
+            <div class="h-4 bg-base-300 rounded w-1/4"></div>
+          </div>
+        </div>
+      </details>
     </div>
   </section>
 
-  <section>
-    {# #65 tier 1 — static voice tool inventory. Load-only trigger; the
-       tool list only changes when dotty-pi-ext is redeployed. #}
-    <div id="tools-inventory-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
-         hx-get="/ui/tools-inventory"
-         hx-trigger="load"
-         hx-sync="this:drop"
-         hx-swap="innerHTML" hx-target="this">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/4"></div>
+  <section id="activity-section" class="dotty-section dotty-feed-section">
+    <div class="dotty-section-head">
+      <div>
+        <div class="dotty-section-kicker">Activity</div>
+        <h2 class="dotty-section-title">Recent turns</h2>
       </div>
+      <span class="text-xs text-base-content/50">live feed</span>
     </div>
-  </section>
-
-  <section>
-    <div id="safety-card-body" class="card bg-base-100 shadow-sm overflow-hidden"
-         hx-get="/ui/safety/recent"
-         hx-trigger="load, every 30s, dotty-refresh from:window"
-         hx-sync="this:drop"
-         hx-swap="innerHTML" hx-target="this">
-      <div class="card-body p-3 animate-pulse">
-        <div class="h-4 bg-base-300 rounded w-1/4"></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="dotty-feed-section">
     <div class="card bg-base-100 shadow-sm overflow-hidden">
       <div class="card-body p-0">
         <div class="px-3 pt-3 pb-2 flex items-center gap-2 flex-wrap border-b border-base-300 flex-none">
@@ -411,6 +519,20 @@
   document.body.addEventListener('htmx:configRequest', function (e) {
     var t = document.querySelector('meta[name=csrf-token]');
     if (t && t.content) { e.detail.headers['X-CSRF-Token'] = t.content; }
+  });
+
+  // Close the navigation menu after a jump. Nested <details> stay native and
+  // keyboard-accessible; this only clears the open state once a destination
+  // has been chosen.
+  document.body.addEventListener('click', function (e) {
+    var link = e.target.closest('.dotty-menu a[href^="#"]');
+    if (!link) return;
+    var menu = link.closest('details.dropdown');
+    if (!menu) return;
+    menu.removeAttribute('open');
+    menu.querySelectorAll('details[open]').forEach(function (item) {
+      item.removeAttribute('open');
+    });
   });
 
   // Polling control — aborts in-flight tile requests when the tab is
