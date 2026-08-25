@@ -3,7 +3,7 @@
    version) now live in the Bridge host-detail modal. The endpoint still
    accepts ?placement=header for callers that want to be explicit; only the
    header layout exists. #}
-<div class="flex items-center gap-3" role="group" aria-label="Host status">
+<div class="flex items-center gap-2 sm:gap-3" role="group" aria-label="Host status">
   {% for d in dots %}
   {% if d.clickable is not defined or d.clickable %}
   <button type="button"
@@ -15,14 +15,14 @@
     <span class="status-dot status-{{ d.status }}"
           {% if d.color %}style="background:{{ d.color }};box-shadow:0 0 8px {{ d.color }}80;"{% endif %}
           aria-hidden="true"></span>
-    <span class="text-xs text-base-content/60">{{ d.label }}</span>
+    <span class="text-xs text-base-content/60 hidden sm:inline">{{ d.label }}</span>
   </button>
   {% else %}
   <span class="flex items-center gap-1" title="{{ d.title }}">
     <span class="status-dot status-{{ d.status }}"
           {% if d.color %}style="background:{{ d.color }};box-shadow:0 0 8px {{ d.color }}80;"{% endif %}
           aria-hidden="true"></span>
-    <span class="text-xs text-base-content/60">{{ d.label }}</span>
+    <span class="text-xs text-base-content/60 hidden sm:inline">{{ d.label }}</span>
   </span>
   {% endif %}
   {% endfor %}

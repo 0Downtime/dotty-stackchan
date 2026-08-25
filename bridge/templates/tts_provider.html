@@ -1,7 +1,7 @@
 <div class="card-body p-3">
   <div class="flex items-center justify-between gap-2">
     <div>
-      <div class="text-xs text-base-content/60">Text-to-speech provider</div>
+      <div class="text-xs text-base-content/60">TTS provider</div>
       <div class="font-semibold">
         {% if provider == "openai_tts" %}OpenAI TTS{% else %}Local Piper{% endif %}
       </div>
@@ -38,8 +38,7 @@
   {% endif %}
 
   <div class="text-xs text-base-content/50 mt-2">
-    Switching restarts only Xiaozhi. Kid Mode filtering still runs first;
-    filtered text is sent to OpenAI when OpenAI TTS is selected.
+    Switching restarts Xiaozhi. Kid Mode filtering stays on first.
   </div>
   {% if not openai_configured %}
   <div class="text-xs text-warning mt-1">OpenAI TTS is unavailable until OPENAI_TTS_API_KEY is configured.</div>
